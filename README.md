@@ -92,6 +92,12 @@ Claude Code에서:
 4. 세션은 `~/.cache/ku-portal-mcp/session.json`에 30분간 캐시
 5. 세션 만료 시 자동 재로그인 (retry 로직 내장)
 
+## Contributing
+
+기여를 환영합니다! 새 게시판 추가, 버그 수정, 문서 개선 등 어떤 형태든 좋습니다.
+
+자세한 내용은 [CONTRIBUTING.md](CONTRIBUTING.md)를 참고해 주세요.
+
 ## 참고
 
 - 인증 플로우는 [kukit](https://github.com/DevKor-github/kukit) 라이브러리를 참고했습니다.
