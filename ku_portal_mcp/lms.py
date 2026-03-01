@@ -52,6 +52,12 @@ class LMSSession:
     def is_valid(self) -> bool:
         return (time.time() - self.created_at) < LMS_SESSION_TTL
 
+    @property
+    def should_refresh(self) -> bool:
+        """True if session is near expiry (within last 20% of TTL)."""
+        elapsed = time.time() - self.created_at
+        return elapsed > (LMS_SESSION_TTL * 0.8)
+
 
 def _load_cached_lms_session() -> LMSSession | None:
     if not LMS_SESSION_FILE.exists():
@@ -131,7 +137,14 @@ async def _ksso_login(client: httpx.AsyncClient, user_id: str, password: str) ->
     )
     data = resp.json()
     if data.get("result") != "success":
-        raise RuntimeError(f"KSSO UserTypeCheck failed: {data}")
+        msg = data.get("msg", "unknown")
+        error_map = {
+            "pwd_chk_fail": "비밀번호가 틀렸습니다. KU_PORTAL_PW 환경변수를 확인하세요.",
+            "id_chk_fail": "아이디를 찾을 수 없습니다. KU_PORTAL_ID 환경변수를 확인하세요.",
+            "lock": "계정이 잠겼습니다. 포털에서 잠금 해제 후 다시 시도하세요.",
+        }
+        human_msg = error_map.get(msg, f"KSSO 로그인 실패: {msg}")
+        raise RuntimeError(human_msg)
     emp_no = data["types"][0]["user_id"]
     new_c_token = data.get("c_token", c_token.group(1))
 
@@ -241,15 +254,37 @@ def _extract_cookies(client: httpx.AsyncClient) -> dict[str, str]:
     return cookies
 
 
+async def verify_lms_session(session: LMSSession) -> bool:
+    """Verify that an LMS session is still valid on the server side."""
+    try:
+        async with _api_client(session) as client:
+            resp = await client.get("/api/v1/users/self")
+            return resp.status_code == 200
+    except Exception:
+        return False
+
+
 async def lms_login(user_id: str, password: str) -> LMSSession:
     """Full LMS login: KSSO -> SAML -> Canvas -> API access.
 
     Returns an LMSSession with cookies for Canvas API calls.
     """
+    if not user_id or not password:
+        raise RuntimeError(
+            "KU_PORTAL_ID / KU_PORTAL_PW 환경변수가 설정되지 않았습니다. "
+            "~/.claude/settings.json의 mcpServers.ku-portal.env를 확인하세요."
+        )
+
     cached = _load_cached_lms_session()
     if cached:
-        logger.info("Using cached LMS session")
-        return cached
+        if not cached.should_refresh:
+            logger.info("Using cached LMS session")
+            return cached
+        # Near expiry — verify server-side before reusing
+        if await verify_lms_session(cached):
+            logger.info("LMS session near expiry but still valid on server, reusing")
+            return cached
+        logger.info("LMS session near expiry and invalid on server, re-logging in")
 
     async with _make_client() as client:
         # KSSO login

@@ -53,6 +53,12 @@ class Session:
     def is_valid(self) -> bool:
         return (time.time() - self.created_at) < SESSION_TTL
 
+    @property
+    def should_refresh(self) -> bool:
+        """True if session is near expiry (within last 20% of TTL)."""
+        elapsed = time.time() - self.created_at
+        return elapsed > (SESSION_TTL * 0.8)
+
 
 def load_cached_session() -> Session | None:
     if not SESSION_FILE.exists():
@@ -206,6 +212,22 @@ async def _get_grw_session(
     return grw_session_id
 
 
+async def verify_session(session: Session) -> bool:
+    """Verify that a KUPID session is still valid on the server side."""
+    try:
+        cookie = f"ssotoken={session.ssotoken}; PORTAL_SESSIONID={session.portal_session_id};"
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            resp = await client.get(
+                f"{PORTAL_BASE}/front/Main.kpd",
+                headers={**_BROWSER_HEADERS, "cookie": cookie},
+                follow_redirects=False,
+            )
+            # If session is valid, we get 200. If expired, we get 302 to login.
+            return resp.status_code == 200
+    except Exception:
+        return False
+
+
 async def login() -> Session:
     """Full login flow: credentials -> ssotoken -> GRW session.
 
@@ -213,14 +235,21 @@ async def login() -> Session:
     """
     cached = load_cached_session()
     if cached:
-        logger.info("Using cached session")
-        return cached
+        if not cached.should_refresh:
+            logger.info("Using cached session")
+            return cached
+        # Near expiry — verify server-side before reusing
+        if await verify_session(cached):
+            logger.info("KUPID session near expiry but still valid on server, reusing")
+            return cached
+        logger.info("KUPID session near expiry and invalid on server, re-logging in")
 
     user_id = os.environ.get("KU_PORTAL_ID")
     password = os.environ.get("KU_PORTAL_PW")
     if not user_id or not password:
         raise RuntimeError(
-            "KU_PORTAL_ID and KU_PORTAL_PW environment variables are required"
+            "KU_PORTAL_ID / KU_PORTAL_PW 환경변수가 설정되지 않았습니다. "
+            "~/.claude/settings.json의 mcpServers.ku-portal.env를 확인하세요."
         )
 
     async with httpx.AsyncClient(timeout=30.0) as client:

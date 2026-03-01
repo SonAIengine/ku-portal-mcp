@@ -74,12 +74,14 @@ _RETRIABLE = (httpx.HTTPError, ValueError, RuntimeError, AttributeError, KeyErro
 
 
 async def _get_session() -> Session:
-    """Get or create a valid session. Auto re-login on expiry."""
+    """Get or create a valid session. Proactive refresh near expiry."""
     global _session
     async with _session_lock:
-        if _session and _session.is_valid:
+        if _session and _session.is_valid and not _session.should_refresh:
             return _session
-        if _session:
+        if _session and _session.should_refresh:
+            logger.info("KUPID session near expiry, proactively refreshing")
+        elif _session:
             logger.info("KUPID session expired, re-logging in")
         _session = await login()
         return _session
@@ -579,18 +581,18 @@ async def kupid_get_syllabus(
 # ──────────────────────────────────────────────
 
 async def _get_lms_session() -> LMSSession:
-    """Get or create a valid LMS session."""
+    """Get or create a valid LMS session. Proactive refresh near expiry."""
     global _lms_session
     async with _lms_session_lock:
-        if _lms_session and _lms_session.is_valid:
+        if _lms_session and _lms_session.is_valid and not _lms_session.should_refresh:
             return _lms_session
-        if _lms_session:
+        if _lms_session and _lms_session.should_refresh:
+            logger.info("LMS session near expiry, proactively refreshing")
+        elif _lms_session:
             logger.info("LMS session expired, re-logging in")
         import os
         user_id = os.environ.get("KU_PORTAL_ID", "")
         password = os.environ.get("KU_PORTAL_PW", "")
-        if not user_id or not password:
-            raise RuntimeError("KU_PORTAL_ID / KU_PORTAL_PW 환경변수가 필요합니다")
         _lms_session = await lms_login(user_id, password)
         return _lms_session
 
