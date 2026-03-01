@@ -12,6 +12,10 @@ allowed-tools: mcp__ku-portal__kupid_login, mcp__ku-portal__kupid_get_library_se
 - 도서관 좌석 조회를 제외한 모든 호출 전에 kupid_login으로 먼저 로그인 (세션 내 1회)
 - 결과는 한국어 테이블 형식으로 간결하게 정리
 - 날짜/시간은 KST 기준
+- CLAUDE.md / MEMORY.md에 사용자 정보(소속 학과, 입학 시기, 수강과목 등)가 있으면 참조하여 개인화된 안내 제공
+  - 예: 종합시험 공지 → 입학 시기 기준 응시 자격 여부 안내
+  - 예: 졸업요건 공지 → 현재 이수 학기 기반 해당 여부 판단
+  - 예: 수강신청 공지 → 수강 중인 과목과 연관 있으면 강조
 
 ## 동작 모드
 
@@ -20,7 +24,7 @@ allowed-tools: mcp__ku-portal__kupid_login, mcp__ku-portal__kupid_get_library_se
 - 층별 잔여석 테이블로 보여줘
 
 ### "공지" [키워드]
-- kupid_get_notices로 학교 전체 공지 + kupid_dept_notices(site_name: "SW·AI융합대학원")로 소속 학과 공지를 병렬 조회
+- kupid_get_notices로 학교 전체 공지 + kupid_dept_notices로 소속 학과 공지를 병렬 조회 (site_name은 MEMORY의 소속 학과 참조)
 - 키워드가 있으면 해당 키워드로 필터링
 - 상세 보기 요청 시 kupid_get_notice_detail 또는 kupid_dept_notice_detail 사용
 
