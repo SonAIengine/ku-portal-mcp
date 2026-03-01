@@ -8,6 +8,12 @@
 
 > "공지사항 보여줘", "도서관 빈자리 있어?", "이번 주 과제 뭐 있어?" 같은 자연어로 포털과 LMS를 사용할 수 있습니다.
 
+<p align="center">
+  <img width="696" alt="Claude Code에서 LMS 수강과목을 조회하는 모습" src="https://github.com/user-attachments/assets/23cb2b8d-78dc-4cd5-bc93-282ad6f54290" />
+  <br>
+  <em>Claude Code에서 "수업 뭐가 있나?" 한마디로 LMS 수강과목을 조회하는 모습</em>
+</p>
+
 ## 이런 걸 할 수 있어요
 
 ### 1. 공지사항 / 학사일정 / 장학공지
@@ -210,9 +216,6 @@ Claude Code에서 아래와 같이 자연어로 물어보세요:
 > 이번 주 과제 뭐 있어?
 > 내 시간표 보여줘
 ```
-
-<img width="696" height="655" alt="image" src="https://github.com/user-attachments/assets/23cb2b8d-78dc-4cd5-bc93-282ad6f54290" />
-
 
 ## 프로젝트 구조
 
