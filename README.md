@@ -10,13 +10,13 @@
 
 <table>
   <tr>
-    <td align="center" width="50%">
-      <img width="420" alt="Claude Code에서 LMS 수강과목을 조회하는 모습" src="https://github.com/user-attachments/assets/23cb2b8d-78dc-4cd5-bc93-282ad6f54290" />
+    <td align="center" valign="top" width="45%">
+      <img width="380" alt="Claude Code에서 LMS 수강과목을 조회하는 모습" src="https://github.com/user-attachments/assets/23cb2b8d-78dc-4cd5-bc93-282ad6f54290" />
       <br>
       <em>"수업 뭐가 있나?" — LMS 수강과목 조회</em>
     </td>
-    <td align="center" width="50%">
-      <img width="420" alt="Claude Code에서 공지사항을 조회하는 모습" src="https://github.com/user-attachments/assets/1bde4127-9ff8-44ac-870d-c4d391407da5" />
+    <td align="center" valign="top" width="55%">
+      <img width="480" alt="Claude Code에서 공지사항을 조회하는 모습" src="https://github.com/user-attachments/assets/1bde4127-9ff8-44ac-870d-c4d391407da5" />
       <br>
       <em>"공지사항 보여줘" — 전체 + 학과 공지 조회</em>
     </td>
