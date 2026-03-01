@@ -155,16 +155,18 @@ KUPID 포털의 각종 게시판을 조회하고, 키워드로 검색할 수 있
 
 ## 설치
 
-### 방법 1: pip (권장)
+### 방법 1: uvx (권장)
 
-```bash
-pip install ku-portal-mcp
-```
-
-### 방법 2: uvx (설치 없이 실행)
+설치 없이 항상 최신 버전을 실행합니다. Claude Code와의 호환성이 가장 좋습니다.
 
 ```bash
 uvx ku-portal-mcp
+```
+
+### 방법 2: pip
+
+```bash
+pip install ku-portal-mcp
 ```
 
 ### 방법 3: 소스에서 설치
@@ -181,12 +183,13 @@ pip install -e .
 
 `~/.claude/settings.json`의 `mcpServers`에 추가합니다:
 
-**pip으로 설치한 경우:**
+**uvx 사용 (권장):**
 ```json
 {
   "mcpServers": {
     "ku-portal": {
-      "command": "ku-portal-mcp",
+      "command": "uvx",
+      "args": ["ku-portal-mcp"],
       "env": {
         "KU_PORTAL_ID": "your-kupid-id",
         "KU_PORTAL_PW": "your-kupid-password"
@@ -196,13 +199,12 @@ pip install -e .
 }
 ```
 
-**uvx로 실행하는 경우:**
+**pip으로 설치한 경우:**
 ```json
 {
   "mcpServers": {
     "ku-portal": {
-      "command": "uvx",
-      "args": ["ku-portal-mcp"],
+      "command": "ku-portal-mcp",
       "env": {
         "KU_PORTAL_ID": "your-kupid-id",
         "KU_PORTAL_PW": "your-kupid-password"
@@ -260,6 +262,38 @@ ku_portal_mcp/
 | 도서관 | HODI REST API | librsv.korea.ac.kr (인증 불필요) |
 | 개설과목 | infodepot | SSO token handoff 방식 세션 연동 |
 | LMS API | Canvas REST API | mylms.korea.ac.kr 세션 쿠키 인증 |
+
+## 트러블슈팅
+
+### MCP 서버가 연결되지 않을 때
+
+1. 서버가 정상 동작하는지 확인:
+   ```bash
+   ku-portal-mcp --version
+   ```
+
+2. uvx 방식으로 전환 (권장):
+   ```json
+   {
+     "command": "uvx",
+     "args": ["ku-portal-mcp"]
+   }
+   ```
+
+3. `python3 -m` 방식 시도:
+   ```json
+   {
+     "command": "python3",
+     "args": ["-m", "ku_portal_mcp"]
+   }
+   ```
+
+4. Claude Code 재시작 후 `/mcp` 명령으로 서버 상태 확인
+
+### 환경변수 관련
+
+- `KU_PORTAL_ID`와 `KU_PORTAL_PW`가 settings.json의 `env`에 올바르게 설정되어 있는지 확인
+- `.env` 파일을 프로젝트 디렉토리에 생성해도 됩니다
 
 ## 라이선스
 

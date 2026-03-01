@@ -45,6 +45,7 @@ from .lms import (
     fetch_lms_announcements, fetch_lms_grades, fetch_lms_submissions,
     fetch_lms_quizzes,
 )
+from . import __version__
 
 # Load .env file (looks in cwd, then project root)
 load_dotenv()
@@ -1090,8 +1091,22 @@ async def kupid_lms_quizzes(course_id: int) -> dict[str, Any]:
 
 
 def main():
+    if "--version" in sys.argv or "-V" in sys.argv:
+        print(f"ku-portal-mcp {__version__}")
+        return
+    if "--help" in sys.argv or "-h" in sys.argv:
+        print("ku-portal-mcp - Korea University KUPID Portal MCP Server")
+        print(f"Version: {__version__}")
+        print("\nUsage:")
+        print("  ku-portal-mcp          Start MCP server (stdio)")
+        print("  ku-portal-mcp --version  Show version")
+        print("\nEnvironment variables:")
+        print("  KU_PORTAL_ID    KUPID portal ID")
+        print("  KU_PORTAL_PW    KUPID portal password")
+        return
+
     try:
-        logger.info("Starting KU Portal MCP Server v0.6.0...")
+        logger.info(f"Starting KU Portal MCP Server v{__version__}...")
         logger.info(f"Python: {sys.version}")
         server.run()
     except Exception as e:
