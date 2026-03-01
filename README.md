@@ -14,6 +14,8 @@
   <em>Claude Code에서 "수업 뭐가 있나?" 한마디로 LMS 수강과목을 조회하는 모습</em>
 </p>
 
+<img width="829" height="739" alt="image" src="https://github.com/user-attachments/assets/1bde4127-9ff8-44ac-870d-c4d391407da5" />
+
 ## 이런 걸 할 수 있어요
 
 ### 1. 공지사항 / 학사일정 / 장학공지
