@@ -4,8 +4,8 @@ build-backend = "hatchling.build"
 
 [project]
 name = "ku-portal-mcp"
-version = "0.5.1"
-description = "MCP server for Korea University KUPID portal - notices, schedules, scholarships, library, timetable, courses, and Canvas LMS"
+version = "0.6.0"
+description = "MCP server for Korea University KUPID portal - notices, schedules, scholarships, library, timetable, courses, Canvas LMS, and department notices"
 readme = "README.md"
 requires-python = ">=3.10"
 license = { text = "MIT" }
