@@ -395,3 +395,80 @@ async def fetch_lms_announcements(
             return []
         resp.raise_for_status()
         return resp.json()
+
+
+async def fetch_lms_grades(
+    session: LMSSession, course_id: int,
+) -> list[dict]:
+    """Fetch enrollment grades for a course.
+
+    Returns enrollment data including current/final scores and grades.
+    """
+    async with _api_client(session) as client:
+        params: list[tuple[str, str]] = [
+            ("user_id", "self"),
+            ("include[]", "grades"),
+            ("include[]", "current_grading_period_scores"),
+        ]
+        resp = await client.get(
+            f"/api/v1/courses/{course_id}/enrollments",
+            params=params,  # type: ignore[arg-type]
+        )
+        resp.raise_for_status()
+        return resp.json()
+
+
+async def fetch_lms_submissions(
+    session: LMSSession, course_id: int,
+) -> list[dict]:
+    """Fetch all assignment submissions for the current user in a course.
+
+    Returns submission status, score, grade, and workflow state.
+    """
+    async with _api_client(session) as client:
+        params: list[tuple[str, str]] = [
+            ("student_ids[]", "self"),
+            ("per_page", "50"),
+            ("include[]", "assignment"),
+            ("include[]", "submission_comments"),
+        ]
+        resp = await client.get(
+            f"/api/v1/courses/{course_id}/students/submissions",
+            params=params,  # type: ignore[arg-type]
+        )
+        resp.raise_for_status()
+        return resp.json()
+
+
+async def fetch_lms_quizzes(
+    session: LMSSession, course_id: int,
+) -> list[dict]:
+    """Fetch quizzes for a course.
+
+    Returns quiz list with due dates, time limits, and question counts.
+    Returns empty list if quizzes feature is not enabled (New Quizzes).
+    """
+    async with _api_client(session) as client:
+        # Classic Quizzes API
+        resp = await client.get(
+            f"/api/v1/courses/{course_id}/quizzes",
+            params={"per_page": "50"},
+        )
+        if resp.status_code == 404:
+            # Quizzes not enabled or using New Quizzes (quiz_next)
+            # Try assignments with quiz type as fallback
+            resp2 = await client.get(
+                f"/api/v1/courses/{course_id}/assignments",
+                params={"per_page": "50"},
+            )
+            if resp2.status_code == 200:
+                assignments = resp2.json()
+                return [
+                    a for a in assignments
+                    if a.get("is_quiz_assignment")
+                    or "quizzes.next" in (a.get("html_url") or "")
+                    or a.get("submission_types") == ["external_tool"]
+                ]
+            return []
+        resp.raise_for_status()
+        return resp.json()

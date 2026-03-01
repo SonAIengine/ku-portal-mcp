@@ -40,7 +40,8 @@ from .lms import (
     lms_login, LMSSession, _clear_lms_session,
     fetch_lms_courses, fetch_lms_assignments, fetch_lms_modules,
     fetch_lms_todo, fetch_lms_upcoming_events, fetch_lms_dashboard,
-    fetch_lms_announcements,
+    fetch_lms_announcements, fetch_lms_grades, fetch_lms_submissions,
+    fetch_lms_quizzes,
 )
 
 # Load .env file (looks in cwd, then project root)
@@ -806,9 +807,124 @@ async def kupid_lms_dashboard() -> dict[str, Any]:
         return {"success": False, "message": f"LMS 대시보드 조회 실패: {e}"}
 
 
+@server.tool()
+async def kupid_lms_grades(course_id: int) -> dict[str, Any]:
+    """Canvas LMS 성적/점수를 조회합니다.
+
+    과목별 현재 점수, 최종 점수, 학점(grade)을 확인합니다.
+    kupid_lms_courses로 course_id를 먼저 확인하세요.
+
+    Args:
+        course_id: 과목 ID (kupid_lms_courses의 id 필드)
+    """
+    try:
+        async def _fetch(session, cid=course_id):
+            return await fetch_lms_grades(session, cid)
+        enrollments = await _lms_with_retry(_fetch)
+        return {
+            "success": True,
+            "course_id": course_id,
+            "enrollments": [
+                {
+                    "type": e.get("type"),
+                    "enrollment_state": e.get("enrollment_state"),
+                    "grades": {
+                        "current_score": e.get("grades", {}).get("current_score"),
+                        "current_grade": e.get("grades", {}).get("current_grade"),
+                        "final_score": e.get("grades", {}).get("final_score"),
+                        "final_grade": e.get("grades", {}).get("final_grade"),
+                    } if e.get("grades") else None,
+                }
+                for e in enrollments
+            ],
+        }
+    except Exception as e:
+        logger.error(f"Failed to fetch LMS grades: {e}")
+        return {"success": False, "message": f"LMS 성적 조회 실패: {e}"}
+
+
+@server.tool()
+async def kupid_lms_submissions(course_id: int) -> dict[str, Any]:
+    """Canvas LMS 과제 제출 현황을 조회합니다.
+
+    과목의 전체 과제에 대한 제출 여부, 점수, 채점 상태를 확인합니다.
+    kupid_lms_courses로 course_id를 먼저 확인하세요.
+
+    Args:
+        course_id: 과목 ID (kupid_lms_courses의 id 필드)
+    """
+    try:
+        async def _fetch(session, cid=course_id):
+            return await fetch_lms_submissions(session, cid)
+        submissions = await _lms_with_retry(_fetch)
+        return {
+            "success": True,
+            "course_id": course_id,
+            "count": len(submissions),
+            "submissions": [
+                {
+                    "assignment_id": s.get("assignment_id"),
+                    "assignment_name": s.get("assignment", {}).get("name") if s.get("assignment") else None,
+                    "due_at": s.get("assignment", {}).get("due_at") if s.get("assignment") else None,
+                    "submitted_at": s.get("submitted_at"),
+                    "workflow_state": s.get("workflow_state"),
+                    "score": s.get("score"),
+                    "grade": s.get("grade"),
+                    "late": s.get("late"),
+                    "missing": s.get("missing"),
+                    "points_deducted": s.get("points_deducted"),
+                    "comments_count": len(s.get("submission_comments", [])),
+                }
+                for s in submissions
+            ],
+        }
+    except Exception as e:
+        logger.error(f"Failed to fetch LMS submissions: {e}")
+        return {"success": False, "message": f"LMS 제출 현황 조회 실패: {e}"}
+
+
+@server.tool()
+async def kupid_lms_quizzes(course_id: int) -> dict[str, Any]:
+    """Canvas LMS 퀴즈/시험 목록을 조회합니다.
+
+    과목의 퀴즈, 시험, 설문 목록과 마감일, 시간제한 등을 확인합니다.
+    kupid_lms_courses로 course_id를 먼저 확인하세요.
+
+    Args:
+        course_id: 과목 ID (kupid_lms_courses의 id 필드)
+    """
+    try:
+        async def _fetch(session, cid=course_id):
+            return await fetch_lms_quizzes(session, cid)
+        quizzes = await _lms_with_retry(_fetch)
+        return {
+            "success": True,
+            "course_id": course_id,
+            "count": len(quizzes),
+            "quizzes": [
+                {
+                    "id": q.get("id"),
+                    "title": q.get("title"),
+                    "quiz_type": q.get("quiz_type"),
+                    "due_at": q.get("due_at"),
+                    "lock_at": q.get("lock_at"),
+                    "time_limit": q.get("time_limit"),
+                    "question_count": q.get("question_count"),
+                    "points_possible": q.get("points_possible"),
+                    "published": q.get("published"),
+                    "html_url": q.get("html_url"),
+                }
+                for q in quizzes
+            ],
+        }
+    except Exception as e:
+        logger.error(f"Failed to fetch LMS quizzes: {e}")
+        return {"success": False, "message": f"LMS 퀴즈 조회 실패: {e}"}
+
+
 def main():
     try:
-        logger.info("Starting KU Portal MCP Server v0.4.1...")
+        logger.info("Starting KU Portal MCP Server v0.5.0...")
         logger.info(f"Python: {sys.version}")
         server.run()
     except Exception as e:
