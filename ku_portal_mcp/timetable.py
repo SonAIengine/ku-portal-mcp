@@ -5,6 +5,7 @@ POST /front/EkuSchedule.kpd AJAX endpoint.
 Requires SSO login.
 """
 
+import asyncio
 import re
 import logging
 from dataclasses import dataclass
@@ -130,10 +131,12 @@ def _resolve_period_time(period: str) -> tuple[str, str]:
 
 
 async def fetch_full_timetable(session: Session) -> list[TimetableEntry]:
-    """Fetch the full weekly timetable (Mon-Fri)."""
+    """Fetch the full weekly timetable (Mon-Fri) in parallel."""
+    results = await asyncio.gather(
+        *(fetch_timetable_day(session, day) for day in range(1, 6))
+    )
     all_entries = []
-    for day in range(1, 6):  # Mon=1 to Fri=5
-        entries = await fetch_timetable_day(session, day)
+    for entries in results:
         all_entries.extend(entries)
     return all_entries
 

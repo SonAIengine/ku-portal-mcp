@@ -12,12 +12,14 @@ Provides tools for accessing Korea University portal (KUPID):
 - Canvas LMS (mylms.korea.ac.kr) integration
 """
 
+import asyncio
 import sys
 import logging
 from dataclasses import asdict
 from pathlib import Path
 from typing import Any
 
+import httpx
 from dotenv import load_dotenv
 from mcp.server.fastmcp import FastMCP
 
@@ -60,30 +62,39 @@ server = FastMCP(
     dependencies=["httpx", "beautifulsoup4", "lxml"],
 )
 
-# Module-level session cache for reuse across tool calls
+# Module-level session cache with async locks to prevent race conditions
 _session: Session | None = None
 _lms_session: LMSSession | None = None
+_session_lock = asyncio.Lock()
+_lms_session_lock = asyncio.Lock()
+
+# Errors that may indicate a stale session (worth retrying with fresh login)
+_RETRIABLE = (httpx.HTTPError, ValueError, RuntimeError, AttributeError, KeyError, IndexError)
 
 
 async def _get_session() -> Session:
     """Get or create a valid session. Auto re-login on expiry."""
     global _session
-    if _session and _session.is_valid:
+    async with _session_lock:
+        if _session and _session.is_valid:
+            return _session
+        if _session:
+            logger.info("KUPID session expired, re-logging in")
+        _session = await login()
         return _session
-    _session = await login()
-    return _session
 
 
 async def _with_retry(fn, *args, **kwargs):
-    """Execute fn with session, auto re-login on failure and retry once."""
+    """Execute fn with session, auto re-login on stale session and retry once."""
     try:
         session = await _get_session()
         return await fn(session, *args, **kwargs)
-    except Exception:
-        # Session might be stale — clear and retry
+    except _RETRIABLE as e:
+        logger.warning(f"KUPID request failed ({type(e).__name__}: {e}), retrying with fresh session")
         global _session
-        clear_session()
-        _session = None
+        async with _session_lock:
+            clear_session()
+            _session = None
         session = await _get_session()
         return await fn(session, *args, **kwargs)
 
@@ -569,26 +580,31 @@ async def kupid_get_syllabus(
 async def _get_lms_session() -> LMSSession:
     """Get or create a valid LMS session."""
     global _lms_session
-    if _lms_session and _lms_session.is_valid:
+    async with _lms_session_lock:
+        if _lms_session and _lms_session.is_valid:
+            return _lms_session
+        if _lms_session:
+            logger.info("LMS session expired, re-logging in")
+        import os
+        user_id = os.environ.get("KU_PORTAL_ID", "")
+        password = os.environ.get("KU_PORTAL_PW", "")
+        if not user_id or not password:
+            raise RuntimeError("KU_PORTAL_ID / KU_PORTAL_PW 환경변수가 필요합니다")
+        _lms_session = await lms_login(user_id, password)
         return _lms_session
-    import os
-    user_id = os.environ.get("KU_PORTAL_ID", "")
-    password = os.environ.get("KU_PORTAL_PW", "")
-    if not user_id or not password:
-        raise RuntimeError("KU_PORTAL_ID / KU_PORTAL_PW 환경변수가 필요합니다")
-    _lms_session = await lms_login(user_id, password)
-    return _lms_session
 
 
 async def _lms_with_retry(fn, *args, **kwargs):
-    """Execute LMS API call with auto re-login on failure."""
+    """Execute LMS API call with auto re-login on auth failure."""
     try:
         session = await _get_lms_session()
         return await fn(session, *args, **kwargs)
-    except Exception:
+    except _RETRIABLE as e:
+        logger.warning(f"LMS request failed ({type(e).__name__}: {e}), retrying with fresh session")
         global _lms_session
-        _clear_lms_session()
-        _lms_session = None
+        async with _lms_session_lock:
+            _clear_lms_session()
+            _lms_session = None
         session = await _get_lms_session()
         return await fn(session, *args, **kwargs)
 
@@ -708,8 +724,12 @@ async def kupid_lms_todo() -> dict[str, Any]:
     마감이 다가오는 과제, 퀴즈 등을 보여줍니다.
     """
     try:
-        todos = await _lms_with_retry(fetch_lms_todo)
-        events = await _lms_with_retry(fetch_lms_upcoming_events)
+        async def _fetch_all(session):
+            todos = await fetch_lms_todo(session)
+            events = await fetch_lms_upcoming_events(session)
+            return todos, events
+
+        todos, events = await _lms_with_retry(_fetch_all)
         return {
             "success": True,
             "todo_count": len(todos),
@@ -788,7 +808,7 @@ async def kupid_lms_dashboard() -> dict[str, Any]:
 
 def main():
     try:
-        logger.info("Starting KU Portal MCP Server v0.4.0...")
+        logger.info("Starting KU Portal MCP Server v0.4.1...")
         logger.info(f"Python: {sys.version}")
         server.run()
     except Exception as e:

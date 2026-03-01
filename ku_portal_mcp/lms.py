@@ -61,6 +61,7 @@ def _load_cached_lms_session() -> LMSSession | None:
         session = LMSSession(**data)
         if session.is_valid:
             return session
+        logger.info("Cached LMS session expired (TTL exceeded)")
     except Exception as e:
         logger.warning(f"Failed to load cached LMS session: {e}")
     return None
