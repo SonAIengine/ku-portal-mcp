@@ -1,52 +1,27 @@
 # ku-portal-mcp
 
-> 고려대학교 SW.AI 융합대학원 61기 인공지능학과 손성준
-
-고려대학교 KUPID 포털을 [Claude Code](https://claude.ai/claude-code)에서 바로 사용할 수 있는 MCP (Model Context Protocol) 서버입니다.
+고려대학교 KUPID 포털 MCP 서버 — Claude Code에서 포털 기능에 직접 접근
 
 ## 기능
 
-| Tool | 설명 |
-|------|------|
-| `kupid_login` | KUPID 포털 로그인 / 세션 확인 |
-| `kupid_get_notices` | 공지사항 목록 조회 |
-| `kupid_get_notice_detail` | 공지사항 상세 조회 (본문 + 첨부파일) |
-| `kupid_get_schedules` | 학사일정 목록 조회 |
-| `kupid_get_schedule_detail` | 학사일정 상세 조회 |
-| `kupid_get_scholarships` | 장학공지 목록 조회 |
-| `kupid_get_scholarship_detail` | 장학공지 상세 조회 |
-| `kupid_search` | 키워드 검색 (공지/학사일정/장학 통합) |
+| # | Tool | 설명 | 인증 |
+|---|------|------|------|
+| 1 | `kupid_login` | 포털 로그인 / 세션 확인 | SSO |
+| 2 | `kupid_get_notices` | 공지사항 목록 | SSO |
+| 3 | `kupid_get_notice_detail` | 공지사항 상세 | SSO |
+| 4 | `kupid_get_schedules` | 학사일정 목록 | SSO |
+| 5 | `kupid_get_schedule_detail` | 학사일정 상세 | SSO |
+| 6 | `kupid_get_scholarships` | 장학공지 목록 | SSO |
+| 7 | `kupid_get_scholarship_detail` | 장학공지 상세 | SSO |
+| 8 | `kupid_search` | 공지/일정/장학 통합 검색 | SSO |
+| 9 | `kupid_get_library_seats` | 도서관 열람실 좌석 현황 | **불필요** |
+| 10 | `kupid_get_timetable` | 개인 수업시간표 + ICS 내보내기 | SSO |
+| 11 | `kupid_search_courses` | 개설과목 검색 (학과별) | SSO |
+| 12 | `kupid_get_syllabus` | 강의계획서 조회 | SSO |
 
 ## 설치
 
-### Claude Code (권장)
-
-```bash
-claude mcp add ku-portal \
-  -- python3 -m ku_portal_mcp.server \
-  -e KU_PORTAL_ID=학번 \
-  -e KU_PORTAL_PW=비밀번호
-```
-
-### 수동 설치
-
-```bash
-# 1. 클론
-git clone https://github.com/SonAIengine/ku-portal-mcp.git
-cd ku-portal-mcp
-
-# 2. 의존성 설치
-pip install -e .
-
-# 3. 환경변수 설정
-cp .env.example .env
-# .env 파일을 열어 학번/비밀번호 입력
-
-# 4. Claude Code에 등록
-claude mcp add ku-portal -- python3 /path/to/ku-portal-mcp/run.py
-```
-
-### settings.json 직접 편집
+### 1. Claude Code MCP 서버 설정
 
 `~/.claude/settings.json`의 `mcpServers`에 추가:
 
@@ -56,53 +31,68 @@ claude mcp add ku-portal -- python3 /path/to/ku-portal-mcp/run.py
     "command": "python3",
     "args": ["/path/to/ku-portal-mcp/run.py"],
     "env": {
-      "KU_PORTAL_ID": "학번",
-      "KU_PORTAL_PW": "비밀번호"
+      "KU_PORTAL_ID": "your-kupid-id",
+      "KU_PORTAL_PW": "your-kupid-password"
     }
   }
 }
 ```
 
-## 환경변수
+### 2. 의존성 설치
 
-| 변수 | 설명 |
-|------|------|
-| `KU_PORTAL_ID` | KUPID 포털 아이디 (학번) |
-| `KU_PORTAL_PW` | KUPID 포털 비밀번호 |
-
-`.env` 파일 또는 환경변수로 설정할 수 있습니다.
+```bash
+cd /path/to/ku-portal-mcp
+pip install -e .
+```
 
 ## 사용 예시
 
-Claude Code에서:
-
+### 도서관 좌석 현황 (인증 불필요)
 ```
-> 고려대 공지사항 보여줘
+> 중앙도서관 좌석 현황 알려줘
+> 도서관 전체 좌석 현황 보여줘
+```
+
+### 수업시간표
+```
+> 이번 주 시간표 조회해줘
+> 시간표를 ICS 파일로 내보내줘
+```
+
+### 개설과목 검색
+```
+> 정보대학 컴퓨터학과 개설과목 검색해줘
+> COSE101 강의계획서 보여줘
+```
+
+### 공지사항/학사일정
+```
+> 최근 공지사항 보여줘
+> "수강신청" 관련 공지 검색해줘
 > 학사일정 조회해줘
-> 첫 번째 공지사항 상세 내용 알려줘
-> 장학공지 목록 보여줘
-> "장학" 키워드로 검색해줘
 ```
 
-## 동작 방식
+## 프로젝트 구조
 
-1. KUPID 포털 (`portal.korea.ac.kr`)에 로그인하여 SSO 토큰 획득
-2. GroupWare (`grw.korea.ac.kr`)에 접근하여 GRW 세션 획득
-3. 공지사항/학사일정/장학공지 HTML을 EUC-KR 디코딩 후 파싱
-4. 세션은 `~/.cache/ku-portal-mcp/session.json`에 30분간 캐시
-5. 세션 만료 시 자동 재로그인 (retry 로직 내장)
+```
+ku_portal_mcp/
+├── server.py      # MCP 서버 + 12개 tool 등록
+├── auth.py        # SSO 로그인, 세션 캐싱
+├── scraper.py     # GRW 공지/일정/장학 파싱
+├── library.py     # 도서관 좌석 현황 (librsv.korea.ac.kr)
+├── timetable.py   # 수업시간표 + ICS export
+└── courses.py     # 개설과목 검색, 강의계획서
+```
 
-## Contributing
+## 기술 스택
 
-기여를 환영합니다! 새 게시판 추가, 버그 수정, 문서 개선 등 어떤 형태든 좋습니다.
+- **MCP**: FastMCP (mcp[cli])
+- **HTTP**: httpx (async)
+- **파싱**: BeautifulSoup4 + lxml
+- **인증**: KUPID SSO token + 세션 캐싱 (30분 TTL)
+- **도서관**: HODI API (librsv.korea.ac.kr, 인증 불필요)
+- **개설과목**: infodepot.korea.ac.kr (SSO token handoff)
 
-자세한 내용은 [CONTRIBUTING.md](CONTRIBUTING.md)를 참고해 주세요.
-
-## 참고
-
-- 인증 플로우는 [kukit](https://github.com/DevKor-github/kukit) 라이브러리를 참고했습니다.
-- Python 3.10 이상이 필요합니다.
-
-## License
+## 라이선스
 
 MIT

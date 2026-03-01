@@ -22,6 +22,8 @@ SESSION_TTL = 30 * 60  # 30 minutes
 
 PORTAL_BASE = "https://portal.korea.ac.kr"
 GRW_BASE = "https://grw.korea.ac.kr"
+INFODEPOT_BASE = "https://infodepot.korea.ac.kr"
+LIBRSV_BASE = "https://librsv.korea.ac.kr"
 
 INTRO_URL = f"{PORTAL_BASE}/front/Intro.kpd"
 LOGIN_URL = f"{PORTAL_BASE}/common/Login.kpd"

@@ -6,10 +6,14 @@ Provides tools for accessing Korea University portal (KUPID):
 - Academic schedule (kind=89)
 - Scholarship notices (kind=88)
 - Search across all boards
+- Library seat availability
+- Personal timetable
+- Course search & syllabus
 """
 
 import sys
 import logging
+from dataclasses import asdict
 from pathlib import Path
 from typing import Any
 
@@ -18,6 +22,17 @@ from mcp.server.fastmcp import FastMCP
 
 from .auth import login, clear_session, Session
 from .scraper import fetch_notice_list, fetch_notice_detail, NoticeItem
+from .library import (
+    fetch_library_seats, fetch_all_seats,
+    LIBRARY_CODES,
+)
+from .timetable import (
+    fetch_timetable_day, fetch_full_timetable, timetable_to_ics,
+)
+from .courses import (
+    search_courses, fetch_syllabus, fetch_departments,
+    COLLEGE_CODES,
+)
 
 # Load .env file (looks in cwd, then project root)
 load_dotenv()
@@ -77,6 +92,10 @@ def _format_items(items: list[NoticeItem], count: int) -> list[dict]:
         for item in items[:count]
     ]
 
+
+# ──────────────────────────────────────────────
+# Existing tools: Login / Notice / Schedule / Scholarship / Search
+# ──────────────────────────────────────────────
 
 @server.tool()
 async def kupid_login() -> dict[str, Any]:
@@ -291,9 +310,253 @@ async def kupid_search(keyword: str, board: str = "all", count: int = 20) -> dic
         return {"success": False, "message": f"검색 실패: {e}"}
 
 
+# ──────────────────────────────────────────────
+# New: Library seat availability (no auth required)
+# ──────────────────────────────────────────────
+
+@server.tool()
+async def kupid_get_library_seats(library_name: str = "") -> dict[str, Any]:
+    """고려대학교 도서관 열람실 좌석 현황을 조회합니다.
+
+    인증 없이 실시간 좌석 현황을 확인할 수 있습니다.
+
+    Args:
+        library_name: 도서관 이름 필터 (빈 문자열이면 전체 도서관 조회)
+            - 중앙도서관, 중앙광장, 백주년기념 학술정보관, 과학도서관, 하나스퀘어, 법학도서관
+    """
+    try:
+        if library_name:
+            # Find matching library code
+            code = None
+            for c, name in LIBRARY_CODES.items():
+                if library_name in name or name in library_name:
+                    code = c
+                    break
+            if not code:
+                return {
+                    "success": False,
+                    "message": f"도서관을 찾을 수 없습니다: {library_name}",
+                    "available_libraries": list(LIBRARY_CODES.values()),
+                }
+            rooms = await fetch_library_seats(code)
+            library_data = {LIBRARY_CODES[code]: [asdict(r) for r in rooms]}
+        else:
+            all_data = await fetch_all_seats()
+            library_data = {
+                name: [asdict(r) for r in rooms]
+                for name, rooms in all_data.items()
+            }
+
+        # Calculate totals
+        total_seats = 0
+        total_available = 0
+        total_in_use = 0
+        for rooms in library_data.values():
+            for room in rooms:
+                total_seats += room["total_seats"]
+                total_available += room["available"]
+                total_in_use += room["in_use"]
+
+        return {
+            "success": True,
+            "libraries": library_data,
+            "summary": {
+                "total_seats": total_seats,
+                "total_available": total_available,
+                "total_in_use": total_in_use,
+                "occupancy_rate": f"{(total_in_use / total_seats * 100):.1f}%" if total_seats else "0%",
+            },
+        }
+    except Exception as e:
+        logger.error(f"Failed to fetch library seats: {e}")
+        return {"success": False, "message": f"도서관 좌석 조회 실패: {e}"}
+
+
+# ──────────────────────────────────────────────
+# New: Personal timetable (SSO required)
+# ──────────────────────────────────────────────
+
+@server.tool()
+async def kupid_get_timetable(day: str = "all", ics_export: bool = False) -> dict[str, Any]:
+    """개인 수업시간표를 조회합니다 (SSO 로그인 필요).
+
+    포털 메인 페이지의 시간표 위젯 데이터를 파싱합니다.
+
+    Args:
+        day: 요일 ("all"=전체, "mon"/"tue"/"wed"/"thu"/"fri")
+        ics_export: True이면 ICS 캘린더 파일 내용도 포함
+    """
+    try:
+        day_map = {"mon": 1, "tue": 2, "wed": 3, "thu": 4, "fri": 5}
+
+        if day == "all":
+            async def _fetch(session):
+                return await fetch_full_timetable(session)
+            entries = await _with_retry(_fetch)
+        elif day in day_map:
+            d = day_map[day]
+            async def _fetch_day(session, d=d):
+                return await fetch_timetable_day(session, d)
+            entries = await _with_retry(_fetch_day)
+        else:
+            return {
+                "success": False,
+                "message": f"잘못된 요일: {day}. all/mon/tue/wed/thu/fri 중 선택",
+            }
+
+        result = {
+            "success": True,
+            "count": len(entries),
+            "timetable": [
+                {
+                    "day": e.day_of_week,
+                    "period": e.period,
+                    "subject": e.subject_name,
+                    "classroom": e.classroom,
+                    "start_time": e.start_time,
+                    "end_time": e.end_time,
+                }
+                for e in entries
+            ],
+        }
+
+        if not entries:
+            result["message"] = "등록된 수업이 없습니다"
+
+        if ics_export and entries:
+            result["ics_content"] = timetable_to_ics(entries)
+
+        return result
+    except Exception as e:
+        logger.error(f"Failed to fetch timetable: {e}")
+        return {"success": False, "message": f"시간표 조회 실패: {e}"}
+
+
+# ──────────────────────────────────────────────
+# New: Course search & syllabus (SSO required)
+# ──────────────────────────────────────────────
+
+@server.tool()
+async def kupid_search_courses(
+    year: str = "2026",
+    semester: str = "1",
+    college: str = "",
+    department: str = "",
+    campus: str = "1",
+) -> dict[str, Any]:
+    """개설과목을 검색합니다 (SSO 로그인 필요).
+
+    학과/단과대별로 개설된 과목을 조회합니다.
+    단과대 코드가 비어있으면 사용 가능한 단과대 목록을 반환합니다.
+
+    Args:
+        year: 학년도 (기본값: "2026")
+        semester: 학기 ("1"=1학기, "2"=2학기, "summer"=여름학기, "winter"=겨울학기)
+        college: 단과대 코드 (예: "5720"=정보대학, ""이면 코드 목록 반환)
+        department: 학과 코드 (예: "5722"=컴퓨터학과, ""이면 학과 목록 반환)
+        campus: 캠퍼스 ("1"=서울, "2"=세종)
+    """
+    try:
+        # If no college specified, return available colleges
+        if not college:
+            return {
+                "success": True,
+                "message": "단과대 코드를 선택해주세요",
+                "colleges": [
+                    {"code": code, "name": name}
+                    for code, name in COLLEGE_CODES.items()
+                ],
+            }
+
+        # If no department specified, fetch department list
+        if not department:
+            async def _fetch_depts(session, col=college):
+                return await fetch_departments(session, col, year, semester)
+            depts = await _with_retry(_fetch_depts)
+            college_name = COLLEGE_CODES.get(college, college)
+            return {
+                "success": True,
+                "message": f"{college_name}의 학과를 선택해주세요",
+                "college": college_name,
+                "departments": depts,
+            }
+
+        # Search courses
+        async def _fetch_courses(session):
+            return await search_courses(
+                session, year=year, semester=semester,
+                campus=campus, college=college, department=department,
+            )
+
+        courses = await _with_retry(_fetch_courses)
+        return {
+            "success": True,
+            "count": len(courses),
+            "courses": [
+                {
+                    "campus": c.campus,
+                    "course_code": c.course_code,
+                    "section": c.section,
+                    "course_type": c.course_type,
+                    "course_name": c.course_name,
+                    "professor": c.professor,
+                    "credits": c.credits,
+                    "schedule": c.schedule,
+                }
+                for c in courses
+            ],
+        }
+    except Exception as e:
+        logger.error(f"Failed to search courses: {e}")
+        return {"success": False, "message": f"개설과목 검색 실패: {e}"}
+
+
+@server.tool()
+async def kupid_get_syllabus(
+    course_code: str,
+    section: str = "00",
+    year: str = "2026",
+    semester: str = "1",
+) -> dict[str, Any]:
+    """강의계획서를 조회합니다 (SSO 로그인 필요).
+
+    Args:
+        course_code: 학수번호 (예: "COSE101")
+        section: 분반 (예: "02")
+        year: 학년도 (기본값: "2026")
+        semester: 학기 ("1"=1학기, "2"=2학기, "summer"=여름학기, "winter"=겨울학기)
+    """
+    try:
+        async def _fetch(session):
+            return await fetch_syllabus(
+                session, course_code=course_code, section=section,
+                year=year, semester=semester,
+            )
+
+        content = await _with_retry(_fetch)
+
+        if not content or len(content) < 50:
+            return {
+                "success": False,
+                "message": f"강의계획서를 찾을 수 없습니다: {course_code} (분반 {section})",
+            }
+
+        return {
+            "success": True,
+            "course_code": course_code,
+            "section": section,
+            "year": year,
+            "semester": semester,
+            "content": content,
+        }
+    except Exception as e:
+        logger.error(f"Failed to fetch syllabus: {e}")
+        return {"success": False, "message": f"강의계획서 조회 실패: {e}"}
+
+
 def main():
     try:
-        logger.info("Starting KU Portal MCP Server...")
+        logger.info("Starting KU Portal MCP Server v0.3.0...")
         logger.info(f"Python: {sys.version}")
         server.run()
     except Exception as e:
