@@ -8,13 +8,20 @@
 
 > "공지사항 보여줘", "도서관 빈자리 있어?", "이번 주 과제 뭐 있어?" 같은 자연어로 포털과 LMS를 사용할 수 있습니다.
 
-<p align="center">
-  <img width="696" alt="Claude Code에서 LMS 수강과목을 조회하는 모습" src="https://github.com/user-attachments/assets/23cb2b8d-78dc-4cd5-bc93-282ad6f54290" />
-  <br>
-  <em>Claude Code에서 "수업 뭐가 있나?" 한마디로 LMS 수강과목을 조회하는 모습</em>
-</p>
-
-<img width="829" height="739" alt="image" src="https://github.com/user-attachments/assets/1bde4127-9ff8-44ac-870d-c4d391407da5" />
+<table>
+  <tr>
+    <td align="center" width="50%">
+      <img width="420" alt="Claude Code에서 LMS 수강과목을 조회하는 모습" src="https://github.com/user-attachments/assets/23cb2b8d-78dc-4cd5-bc93-282ad6f54290" />
+      <br>
+      <em>"수업 뭐가 있나?" — LMS 수강과목 조회</em>
+    </td>
+    <td align="center" width="50%">
+      <img width="420" alt="Claude Code에서 공지사항을 조회하는 모습" src="https://github.com/user-attachments/assets/1bde4127-9ff8-44ac-870d-c4d391407da5" />
+      <br>
+      <em>"공지사항 보여줘" — 전체 + 학과 공지 조회</em>
+    </td>
+  </tr>
+</table>
 
 ## 이런 걸 할 수 있어요
 
