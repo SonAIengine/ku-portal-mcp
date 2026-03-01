@@ -9,6 +9,7 @@ Provides tools for accessing Korea University portal (KUPID):
 - Library seat availability
 - Personal timetable
 - Course search & syllabus
+- Canvas LMS (mylms.korea.ac.kr) integration
 """
 
 import sys
@@ -33,6 +34,12 @@ from .courses import (
     search_courses, fetch_syllabus, fetch_departments,
     COLLEGE_CODES,
 )
+from .lms import (
+    lms_login, LMSSession, _clear_lms_session,
+    fetch_lms_courses, fetch_lms_assignments, fetch_lms_modules,
+    fetch_lms_todo, fetch_lms_upcoming_events, fetch_lms_dashboard,
+    fetch_lms_announcements,
+)
 
 # Load .env file (looks in cwd, then project root)
 load_dotenv()
@@ -55,6 +62,7 @@ server = FastMCP(
 
 # Module-level session cache for reuse across tool calls
 _session: Session | None = None
+_lms_session: LMSSession | None = None
 
 
 async def _get_session() -> Session:
@@ -535,7 +543,7 @@ async def kupid_get_syllabus(
 
         content = await _with_retry(_fetch)
 
-        if not content or len(content) < 50:
+        if not content:
             return {
                 "success": False,
                 "message": f"강의계획서를 찾을 수 없습니다: {course_code} (분반 {section})",
@@ -554,9 +562,233 @@ async def kupid_get_syllabus(
         return {"success": False, "message": f"강의계획서 조회 실패: {e}"}
 
 
+# ──────────────────────────────────────────────
+# New: Canvas LMS (mylms.korea.ac.kr)
+# ──────────────────────────────────────────────
+
+async def _get_lms_session() -> LMSSession:
+    """Get or create a valid LMS session."""
+    global _lms_session
+    if _lms_session and _lms_session.is_valid:
+        return _lms_session
+    import os
+    user_id = os.environ.get("KU_PORTAL_ID", "")
+    password = os.environ.get("KU_PORTAL_PW", "")
+    if not user_id or not password:
+        raise RuntimeError("KU_PORTAL_ID / KU_PORTAL_PW 환경변수가 필요합니다")
+    _lms_session = await lms_login(user_id, password)
+    return _lms_session
+
+
+async def _lms_with_retry(fn, *args, **kwargs):
+    """Execute LMS API call with auto re-login on failure."""
+    try:
+        session = await _get_lms_session()
+        return await fn(session, *args, **kwargs)
+    except Exception:
+        global _lms_session
+        _clear_lms_session()
+        _lms_session = None
+        session = await _get_lms_session()
+        return await fn(session, *args, **kwargs)
+
+
+@server.tool()
+async def kupid_lms_courses() -> dict[str, Any]:
+    """Canvas LMS 수강과목 목록을 조회합니다.
+
+    mylms.korea.ac.kr의 Canvas LMS에서 수강 중인 과목 목록을 가져옵니다.
+    SSO 로그인이 필요합니다.
+    """
+    try:
+        courses = await _lms_with_retry(fetch_lms_courses)
+        return {
+            "success": True,
+            "count": len(courses),
+            "courses": [
+                {
+                    "id": c.get("id"),
+                    "name": c.get("name"),
+                    "course_code": c.get("course_code"),
+                    "term": c.get("term", {}).get("name") if c.get("term") else None,
+                    "workflow_state": c.get("workflow_state"),
+                }
+                for c in courses
+            ],
+        }
+    except Exception as e:
+        logger.error(f"Failed to fetch LMS courses: {e}")
+        return {"success": False, "message": f"LMS 수강과목 조회 실패: {e}"}
+
+
+@server.tool()
+async def kupid_lms_assignments(course_id: int, upcoming_only: bool = False) -> dict[str, Any]:
+    """Canvas LMS 과제 목록을 조회합니다.
+
+    특정 과목의 과제(assignments) 목록을 가져옵니다.
+    kupid_lms_courses로 course_id를 먼저 확인하세요.
+
+    Args:
+        course_id: 과목 ID (kupid_lms_courses의 id 필드)
+        upcoming_only: True이면 마감 전 과제만 표시
+    """
+    try:
+        async def _fetch(session, cid=course_id, upcoming=upcoming_only):
+            return await fetch_lms_assignments(session, cid, upcoming)
+        assignments = await _lms_with_retry(_fetch)
+        return {
+            "success": True,
+            "course_id": course_id,
+            "count": len(assignments),
+            "assignments": [
+                {
+                    "id": a.get("id"),
+                    "name": a.get("name"),
+                    "due_at": a.get("due_at"),
+                    "points_possible": a.get("points_possible"),
+                    "submission_types": a.get("submission_types"),
+                    "description": (a.get("description") or "")[:500],
+                    "html_url": a.get("html_url"),
+                }
+                for a in assignments
+            ],
+        }
+    except Exception as e:
+        logger.error(f"Failed to fetch LMS assignments: {e}")
+        return {"success": False, "message": f"LMS 과제 조회 실패: {e}"}
+
+
+@server.tool()
+async def kupid_lms_modules(course_id: int) -> dict[str, Any]:
+    """Canvas LMS 강의자료(모듈)를 조회합니다.
+
+    주차별 강의 모듈과 포함된 자료를 가져옵니다.
+    kupid_lms_courses로 course_id를 먼저 확인하세요.
+
+    Args:
+        course_id: 과목 ID (kupid_lms_courses의 id 필드)
+    """
+    try:
+        async def _fetch(session, cid=course_id):
+            return await fetch_lms_modules(session, cid)
+        modules = await _lms_with_retry(_fetch)
+        return {
+            "success": True,
+            "course_id": course_id,
+            "count": len(modules),
+            "modules": [
+                {
+                    "id": m.get("id"),
+                    "name": m.get("name"),
+                    "position": m.get("position"),
+                    "state": m.get("state"),
+                    "items_count": m.get("items_count"),
+                    "items": [
+                        {
+                            "id": item.get("id"),
+                            "title": item.get("title"),
+                            "type": item.get("type"),
+                            "html_url": item.get("html_url"),
+                        }
+                        for item in m.get("items", [])
+                    ],
+                }
+                for m in modules
+            ],
+        }
+    except Exception as e:
+        logger.error(f"Failed to fetch LMS modules: {e}")
+        return {"success": False, "message": f"LMS 모듈 조회 실패: {e}"}
+
+
+@server.tool()
+async def kupid_lms_todo() -> dict[str, Any]:
+    """Canvas LMS 할 일(Todo) 목록을 조회합니다.
+
+    마감이 다가오는 과제, 퀴즈 등을 보여줍니다.
+    """
+    try:
+        todos = await _lms_with_retry(fetch_lms_todo)
+        events = await _lms_with_retry(fetch_lms_upcoming_events)
+        return {
+            "success": True,
+            "todo_count": len(todos),
+            "todos": [
+                {
+                    "type": t.get("type"),
+                    "assignment": {
+                        "name": t.get("assignment", {}).get("name"),
+                        "due_at": t.get("assignment", {}).get("due_at"),
+                        "course_id": t.get("assignment", {}).get("course_id"),
+                        "html_url": t.get("assignment", {}).get("html_url"),
+                    } if t.get("assignment") else None,
+                }
+                for t in todos
+            ],
+            "upcoming_events_count": len(events),
+            "upcoming_events": [
+                {
+                    "title": e.get("title"),
+                    "start_at": e.get("start_at"),
+                    "end_at": e.get("end_at"),
+                    "html_url": e.get("html_url"),
+                }
+                for e in events
+            ],
+        }
+    except Exception as e:
+        logger.error(f"Failed to fetch LMS todo: {e}")
+        return {"success": False, "message": f"LMS 할 일 조회 실패: {e}"}
+
+
+@server.tool()
+async def kupid_lms_dashboard() -> dict[str, Any]:
+    """Canvas LMS 대시보드를 조회합니다.
+
+    현재 수강 중인 과목 카드와 과제/이벤트 현황을 보여줍니다.
+    """
+    try:
+        cards = await _lms_with_retry(fetch_lms_dashboard)
+        course_ids = [c.get("id") for c in cards if c.get("id")]
+        announcements = []
+        if course_ids:
+            try:
+                announcements = await _lms_with_retry(
+                    fetch_lms_announcements, course_ids[:10]
+                )
+            except Exception:
+                pass  # Announcements may not be available
+
+        return {
+            "success": True,
+            "courses": [
+                {
+                    "id": c.get("id"),
+                    "name": c.get("shortName", c.get("longName")),
+                    "course_code": c.get("courseCode"),
+                    "term": c.get("term"),
+                }
+                for c in cards
+            ],
+            "announcements": [
+                {
+                    "id": a.get("id"),
+                    "title": a.get("title"),
+                    "posted_at": a.get("posted_at"),
+                    "context_code": a.get("context_code"),
+                    "message": (a.get("message") or "")[:300],
+                }
+                for a in announcements[:10]
+            ],
+        }
+    except Exception as e:
+        logger.error(f"Failed to fetch LMS dashboard: {e}")
+        return {"success": False, "message": f"LMS 대시보드 조회 실패: {e}"}
+
+
 def main():
     try:
-        logger.info("Starting KU Portal MCP Server v0.3.0...")
+        logger.info("Starting KU Portal MCP Server v0.4.0...")
         logger.info(f"Python: {sys.version}")
         server.run()
     except Exception as e:

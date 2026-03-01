@@ -219,7 +219,37 @@ async def fetch_syllabus(
 
 
 def _parse_syllabus_html(html: str) -> str:
-    """Parse syllabus page HTML into readable text."""
+    """Parse syllabus page HTML into readable text.
+
+    The syllabus page uses Allgen/HanaReport (internal report server).
+    If the report server URL is found, extract parameters and return info.
+    """
+    # Check if response contains the Allgen report server redirect
+    report_match = re.search(
+        r"PrintObj\('(.+?)','(http[^']+)'\)", html,
+    )
+    if report_match:
+        params_str = report_match.group(1)
+        # Parse [:key]=value pairs
+        pairs = re.findall(r'\[:(\w+)\]=([^\[]*)', params_str)
+        info_parts = []
+        for key, val in pairs:
+            if val:
+                label = {
+                    "p_year": "학년도",
+                    "p_term": "학기",
+                    "p_cour_cd": "학수번호",
+                    "p_cour_cls": "분반",
+                    "p_grad_cd": "대학원코드",
+                }.get(key, key)
+                info_parts.append(f"{label}: {val}")
+
+        return (
+            "강의계획서는 교내 리포트 서버(Allgen)에서 제공됩니다.\n"
+            "KUPID 포털에서 직접 열람해주세요.\n\n"
+            + "\n".join(info_parts)
+        )
+
     soup = BeautifulSoup(html, "lxml")
 
     # Remove scripts and styles
@@ -227,6 +257,5 @@ def _parse_syllabus_html(html: str) -> str:
         tag.decompose()
 
     text = soup.get_text(separator="\n", strip=True)
-    # Collapse multiple blank lines
     text = re.sub(r"\n{3,}", "\n\n", text)
     return text.strip()

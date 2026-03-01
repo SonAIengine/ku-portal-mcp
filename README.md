@@ -18,6 +18,11 @@
 | 10 | `kupid_get_timetable` | 개인 수업시간표 + ICS 내보내기 | SSO |
 | 11 | `kupid_search_courses` | 개설과목 검색 (학과별) | SSO |
 | 12 | `kupid_get_syllabus` | 강의계획서 조회 | SSO |
+| 13 | `kupid_lms_courses` | LMS 수강과목 목록 | KSSO |
+| 14 | `kupid_lms_assignments` | LMS 과제 목록 | KSSO |
+| 15 | `kupid_lms_modules` | LMS 강의자료 (주차별) | KSSO |
+| 16 | `kupid_lms_todo` | LMS 할 일 / 다가오는 이벤트 | KSSO |
+| 17 | `kupid_lms_dashboard` | LMS 대시보드 + 공지사항 | KSSO |
 
 ## 설치
 
@@ -65,6 +70,15 @@ pip install -e .
 > COSE101 강의계획서 보여줘
 ```
 
+### Canvas LMS (mylms.korea.ac.kr)
+```
+> LMS 수강과목 보여줘
+> 딥러닝 과제 목록 조회해줘
+> LMS 할 일 목록 보여줘
+> LMS 대시보드 조회해줘
+> 자연어처리 강의자료 보여줘
+```
+
 ### 공지사항/학사일정
 ```
 > 최근 공지사항 보여줘
@@ -76,12 +90,13 @@ pip install -e .
 
 ```
 ku_portal_mcp/
-├── server.py      # MCP 서버 + 12개 tool 등록
-├── auth.py        # SSO 로그인, 세션 캐싱
+├── server.py      # MCP 서버 + 17개 tool 등록
+├── auth.py        # KUPID SSO 로그인, 세션 캐싱
 ├── scraper.py     # GRW 공지/일정/장학 파싱
 ├── library.py     # 도서관 좌석 현황 (librsv.korea.ac.kr)
 ├── timetable.py   # 수업시간표 + ICS export
-└── courses.py     # 개설과목 검색, 강의계획서
+├── courses.py     # 개설과목 검색, 강의계획서 (infodepot)
+└── lms.py         # Canvas LMS 연동 (mylms.korea.ac.kr)
 ```
 
 ## 기술 스택
@@ -92,6 +107,7 @@ ku_portal_mcp/
 - **인증**: KUPID SSO token + 세션 캐싱 (30분 TTL)
 - **도서관**: HODI API (librsv.korea.ac.kr, 인증 불필요)
 - **개설과목**: infodepot.korea.ac.kr (SSO token handoff)
+- **LMS**: Canvas REST API via KSSO SAML SSO + RSA decryption (cryptography)
 
 ## 라이선스
 
