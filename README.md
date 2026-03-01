@@ -211,6 +211,9 @@ Claude Code에서 아래와 같이 자연어로 물어보세요:
 > 내 시간표 보여줘
 ```
 
+<img width="696" height="655" alt="image" src="https://github.com/user-attachments/assets/23cb2b8d-78dc-4cd5-bc93-282ad6f54290" />
+
+
 ## 프로젝트 구조
 
 ```
