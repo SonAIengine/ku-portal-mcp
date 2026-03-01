@@ -13,6 +13,9 @@
 | `kupid_get_notice_detail` | 공지사항 상세 조회 (본문 + 첨부파일) |
 | `kupid_get_schedules` | 학사일정 목록 조회 |
 | `kupid_get_schedule_detail` | 학사일정 상세 조회 |
+| `kupid_get_scholarships` | 장학공지 목록 조회 |
+| `kupid_get_scholarship_detail` | 장학공지 상세 조회 |
+| `kupid_search` | 키워드 검색 (공지/학사일정/장학 통합) |
 
 ## 설치
 
@@ -77,14 +80,17 @@ Claude Code에서:
 > 고려대 공지사항 보여줘
 > 학사일정 조회해줘
 > 첫 번째 공지사항 상세 내용 알려줘
+> 장학공지 목록 보여줘
+> "장학" 키워드로 검색해줘
 ```
 
 ## 동작 방식
 
 1. KUPID 포털 (`portal.korea.ac.kr`)에 로그인하여 SSO 토큰 획득
 2. GroupWare (`grw.korea.ac.kr`)에 접근하여 GRW 세션 획득
-3. 공지사항/학사일정 HTML을 EUC-KR 디코딩 후 파싱
+3. 공지사항/학사일정/장학공지 HTML을 EUC-KR 디코딩 후 파싱
 4. 세션은 `~/.cache/ku-portal-mcp/session.json`에 30분간 캐시
+5. 세션 만료 시 자동 재로그인 (retry 로직 내장)
 
 ## 참고
 
