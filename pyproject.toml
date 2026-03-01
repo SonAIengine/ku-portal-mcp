@@ -4,21 +4,25 @@ build-backend = "hatchling.build"
 
 [project]
 name = "ku-portal-mcp"
-version = "0.1.0"
-description = "MCP server for Korea University KUPID portal - access notices and academic schedules from Claude Code"
+version = "0.2.0"
+description = "MCP server for Korea University KUPID portal - access notices, schedules, and scholarships from Claude Code"
 readme = "README.md"
 requires-python = ">=3.10"
 license = { text = "MIT" }
 authors = [
-    { name = "SonAIengine" }
+    { name = "SonAIengine", email = "sonsj97@korea.ac.kr" }
 ]
-keywords = ["mcp", "korea-university", "kupid", "claude"]
+keywords = ["mcp", "korea-university", "kupid", "claude", "claude-code", "model-context-protocol"]
 classifiers = [
-    "Development Status :: 3 - Alpha",
+    "Development Status :: 4 - Beta",
     "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
     "License :: OSI Approved :: MIT License",
+    "Topic :: Education",
 ]
-
 dependencies = [
     "mcp[cli]>=1.5.0",
     "httpx>=0.27.0",
@@ -26,6 +30,11 @@ dependencies = [
     "lxml>=5.0.0",
     "python-dotenv>=1.0.0",
 ]
+
+[project.urls]
+Homepage = "https://github.com/SonAIengine/ku-portal-mcp"
+Repository = "https://github.com/SonAIengine/ku-portal-mcp"
+Issues = "https://github.com/SonAIengine/ku-portal-mcp/issues"
 
 [project.scripts]
 ku-portal-mcp = "ku_portal_mcp.server:main"
