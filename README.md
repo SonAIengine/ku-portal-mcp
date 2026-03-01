@@ -1,5 +1,9 @@
 # ku-portal-mcp
 
+[![PyPI version](https://img.shields.io/pypi/v/ku-portal-mcp.svg)](https://pypi.org/project/ku-portal-mcp/)
+[![Python](https://img.shields.io/pypi/pyversions/ku-portal-mcp.svg)](https://pypi.org/project/ku-portal-mcp/)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+
 고려대학교 KUPID 포털 MCP 서버 — Claude Code에서 대학 생활에 필요한 정보를 바로 조회
 
 > "공지사항 보여줘", "도서관 빈자리 있어?", "이번 주 과제 뭐 있어?" 같은 자연어로 포털과 LMS를 사용할 수 있습니다.
@@ -126,33 +130,72 @@ KUPID 포털의 각종 게시판을 조회하고, 키워드로 검색할 수 있
 
 ## 설치
 
-### 1. Claude Code MCP 서버 설정
+### 방법 1: pip (권장)
 
-`~/.claude/settings.json`의 `mcpServers`에 추가:
+```bash
+pip install ku-portal-mcp
+```
 
+### 방법 2: uvx (설치 없이 실행)
+
+```bash
+uvx ku-portal-mcp
+```
+
+### 방법 3: 소스에서 설치
+
+```bash
+git clone https://github.com/SonAIengine/ku-portal-mcp.git
+cd ku-portal-mcp
+pip install -e .
+```
+
+## Claude Code에서 사용하기
+
+### 1. MCP 서버 등록
+
+`~/.claude/settings.json`의 `mcpServers`에 추가합니다:
+
+**pip으로 설치한 경우:**
 ```json
 {
-  "ku-portal": {
-    "command": "python3",
-    "args": ["/path/to/ku-portal-mcp/run.py"],
-    "env": {
-      "KU_PORTAL_ID": "your-kupid-id",
-      "KU_PORTAL_PW": "your-kupid-password"
+  "mcpServers": {
+    "ku-portal": {
+      "command": "ku-portal-mcp",
+      "env": {
+        "KU_PORTAL_ID": "your-kupid-id",
+        "KU_PORTAL_PW": "your-kupid-password"
+      }
     }
   }
 }
 ```
 
-### 2. 의존성 설치
-
-```bash
-cd /path/to/ku-portal-mcp
-pip install -e .
+**uvx로 실행하는 경우:**
+```json
+{
+  "mcpServers": {
+    "ku-portal": {
+      "command": "uvx",
+      "args": ["ku-portal-mcp"],
+      "env": {
+        "KU_PORTAL_ID": "your-kupid-id",
+        "KU_PORTAL_PW": "your-kupid-password"
+      }
+    }
+  }
+}
 ```
+
+> `KU_PORTAL_ID`와 `KU_PORTAL_PW`는 KUPID 포털 로그인에 사용하는 학번과 비밀번호입니다.
+
+### 2. Claude Code 재시작
+
+설정 저장 후 Claude Code를 재시작하면 MCP 서버가 자동으로 연결됩니다.
 
 ### 3. 동작 확인
 
-Claude Code에서 아래 명령을 입력해보세요:
+Claude Code에서 아래와 같이 자연어로 물어보세요:
 
 ```
 > 도서관 좌석 현황 보여줘
@@ -160,11 +203,17 @@ Claude Code에서 아래 명령을 입력해보세요:
 
 로그인 없이 바로 결과가 나오면 정상적으로 설치된 것입니다.
 
+```
+> 최근 공지사항 보여줘
+> 이번 주 과제 뭐 있어?
+> 내 시간표 보여줘
+```
+
 ## 프로젝트 구조
 
 ```
 ku_portal_mcp/
-├── server.py      # MCP 서버 + 17개 tool 등록
+├── server.py      # MCP 서버 + 20개 tool 등록
 ├── auth.py        # KUPID SSO 로그인, 세션 캐싱 (30분 TTL)
 ├── scraper.py     # GRW 공지/일정/장학 파싱
 ├── library.py     # 도서관 좌석 현황 (librsv.korea.ac.kr)
