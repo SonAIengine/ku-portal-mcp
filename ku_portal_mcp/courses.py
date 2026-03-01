@@ -55,6 +55,21 @@ class CourseInfo:
     schedule: str
 
 
+@dataclass
+class EnrolledCourse:
+    course_code: str   # e.g. AAI110
+    section: str       # e.g. 00
+    course_type: str   # e.g. 전공선택
+    course_name: str   # e.g. 딥러닝
+    professor: str     # e.g. 석흥일
+    credits: str       # e.g. 2(2)
+    schedule: str      # e.g. 월(7-8) 애기능생활관 301호
+    retake: bool       # 재수강여부
+    status: str        # e.g. 신청
+    grad_code: str     # e.g. 7298 (for syllabus link)
+    dept_code: str     # e.g. 7313 (for syllabus link)
+
+
 async def _establish_infodepot_session(client: httpx.AsyncClient, session: Session) -> None:
     """Establish session on infodepot via SSO token handoff."""
     await client.get(
@@ -216,6 +231,109 @@ async def fetch_syllabus(
         html = resp.content.decode("euc-kr", errors="replace")
 
     return _parse_syllabus_html(html)
+
+
+async def fetch_my_courses(
+    session: Session,
+    year: str = "2026",
+    semester: str = "1",
+) -> tuple[list[EnrolledCourse], str]:
+    """Fetch enrolled courses from infodepot CourseListSearch.
+
+    Args:
+        session: Valid KUPID session.
+        year: Academic year (e.g., "2026").
+        semester: "1", "2", "summer", "winter".
+
+    Returns:
+        Tuple of (list of EnrolledCourse, total_credits string).
+    """
+    term_code = TERM_CODES.get(semester, semester)
+    yt = f"{year}{term_code}"
+
+    async with httpx.AsyncClient(timeout=30.0, follow_redirects=True) as client:
+        await _establish_infodepot_session(client, session)
+
+        # Initial GET to establish page
+        await client.get(
+            f"{INFODEPOT_BASE}/course/CourseListSearch.jsp",
+            params={"compId": "82", "menuCd": "247", "language": "ko"},
+            headers={**_BROWSER_HEADERS, "referer": f"{INFODEPOT_BASE}/"},
+        )
+
+        # POST to set year/term
+        resp = await client.post(
+            f"{INFODEPOT_BASE}/course/CourseListSearch.jsp",
+            data={"yt": yt},
+            headers={
+                **_BROWSER_HEADERS,
+                "referer": f"{INFODEPOT_BASE}/course/CourseListSearch.jsp",
+                "content-type": "application/x-www-form-urlencoded",
+            },
+        )
+        html = resp.content.decode("euc-kr", errors="replace")
+
+    return _parse_enrolled_courses(html)
+
+
+def _parse_enrolled_courses(html: str) -> tuple[list[EnrolledCourse], str]:
+    """Parse enrolled courses HTML table and total credits."""
+    soup = BeautifulSoup(html, "lxml")
+    courses: list[EnrolledCourse] = []
+
+    # Extract total credits: "신청하신 총 학점수는 X.X학점 입니다."
+    total_credits = "0"
+    credits_match = re.search(r"신청하신\s*총\s*학점수는\s*(\d+\.?\d*)\s*학점", html)
+    if credits_match:
+        total_credits = credits_match.group(1)
+
+    # Build a map of course_code -> (grad_code, dept_code) from f_go() links
+    fgo_map: dict[str, tuple[str, str]] = {}
+    for a_tag in soup.find_all("a", href=re.compile(r"javascript:f_go")):
+        onclick = a_tag.get("href", "")
+        # f_go('2026','1R','7298','7313','AAI110','00','딥러닝')
+        m = re.search(r"f_go\(\s*'[^']*'\s*,\s*'[^']*'\s*,\s*'(\w+)'\s*,\s*'(\w+)'\s*,\s*'(\w+)'", onclick)
+        if m:
+            fgo_map[m.group(3)] = (m.group(1), m.group(2))
+
+    # Find the main data table (11-column course table)
+    for table in soup.find_all("table"):
+        rows = table.find_all("tr")
+        if len(rows) < 2:
+            continue
+
+        for row in rows:
+            cells = row.find_all("td")
+            if len(cells) < 10:
+                continue
+
+            cell_texts = [td.get_text(strip=True) for td in cells]
+
+            # Column 0: No (순번) — should be a digit
+            if not cell_texts[0].isdigit():
+                continue
+
+            course_code = cell_texts[1]
+            grad_code, dept_code = fgo_map.get(course_code, ("", ""))
+
+            retake_text = cell_texts[8] if len(cells) > 8 else ""
+            retake = retake_text in ("Y", "재수강")
+
+            courses.append(EnrolledCourse(
+                course_code=course_code,
+                section=cell_texts[2],
+                course_type=cell_texts[3],
+                course_name=cell_texts[4],
+                professor=cell_texts[5],
+                credits=cell_texts[6],
+                schedule=cell_texts[7],
+                retake=retake,
+                status=cell_texts[9] if len(cells) > 9 else "",
+                grad_code=grad_code,
+                dept_code=dept_code,
+            ))
+
+    return courses, total_credits
 
 
 def _parse_syllabus_html(html: str) -> str:

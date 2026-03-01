@@ -34,7 +34,7 @@ from .timetable import (
 )
 from .courses import (
     search_courses, fetch_syllabus, fetch_departments,
-    COLLEGE_CODES,
+    fetch_my_courses, COLLEGE_CODES,
 )
 from .lms import (
     lms_login, LMSSession, _clear_lms_session,
@@ -577,6 +577,54 @@ async def kupid_get_syllabus(
 
 
 # ──────────────────────────────────────────────
+# New: My enrolled courses (infodepot)
+# ──────────────────────────────────────────────
+
+@server.tool()
+async def kupid_my_courses(year: str = "2026", semester: str = "1") -> dict[str, Any]:
+    """내 수강신청 내역을 조회합니다 (SSO 로그인 필요).
+
+    학수번호, 강의시간, 강의실, 교수, 학점, 이수구분 등 상세 정보를 반환합니다.
+    대학원 과목도 포함됩니다.
+
+    Args:
+        year: 학년도 (기본값: "2026")
+        semester: 학기 ("1"=1학기, "2"=2학기, "summer"=여름학기, "winter"=겨울학기)
+    """
+    try:
+        async def _fetch(session):
+            return await fetch_my_courses(session, year=year, semester=semester)
+
+        courses, total_credits = await _with_retry(_fetch)
+        return {
+            "success": True,
+            "year": year,
+            "semester": semester,
+            "total_credits": total_credits,
+            "count": len(courses),
+            "courses": [
+                {
+                    "course_code": c.course_code,
+                    "section": c.section,
+                    "course_type": c.course_type,
+                    "course_name": c.course_name,
+                    "professor": c.professor,
+                    "credits": c.credits,
+                    "schedule": c.schedule,
+                    "retake": c.retake,
+                    "status": c.status,
+                    "grad_code": c.grad_code,
+                    "dept_code": c.dept_code,
+                }
+                for c in courses
+            ],
+        }
+    except Exception as e:
+        logger.error(f"Failed to fetch my courses: {e}")
+        return {"success": False, "message": f"수강신청 내역 조회 실패: {e}"}
+
+
+# ──────────────────────────────────────────────
 # New: Canvas LMS (mylms.korea.ac.kr)
 # ──────────────────────────────────────────────
 
@@ -926,7 +974,7 @@ async def kupid_lms_quizzes(course_id: int) -> dict[str, Any]:
 
 def main():
     try:
-        logger.info("Starting KU Portal MCP Server v0.5.0...")
+        logger.info("Starting KU Portal MCP Server v0.5.1...")
         logger.info(f"Python: {sys.version}")
         server.run()
     except Exception as e:
