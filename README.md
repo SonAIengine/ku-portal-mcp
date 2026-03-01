@@ -216,9 +216,12 @@ pip install -e .
 
 > `KU_PORTAL_ID`와 `KU_PORTAL_PW`는 KUPID 포털 로그인에 사용하는 학번과 비밀번호입니다.
 
-### 2. Claude Code 재시작
+### 2. 설정 적용
 
-설정 저장 후 Claude Code를 재시작하면 MCP 서버가 자동으로 연결됩니다.
+MCP 서버 설정은 Claude Code **시작 시점에 1회** 로드되므로, `settings.json` 수정만으로는 즉시 반영되지 않습니다.
+
+- **방법 A**: Claude Code를 재시작
+- **방법 B**: 세션 내에서 `/mcp` 명령어 실행 → MCP 서버 추가/재시작을 재시작 없이 바로 적용
 
 ### 3. 동작 확인
 
