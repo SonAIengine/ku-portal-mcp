@@ -1,7 +1,7 @@
 ---
 description: "고려대 포털(KUPID) 통합 조회 — 도서관/공지/LMS/시간표/장학"
 argument-hint: "[도서관|공지|과제|성적|시간표|장학|검색] [상세 키워드]"
-allowed-tools: mcp__ku-portal__kupid_login, mcp__ku-portal__kupid_get_library_seats, mcp__ku-portal__kupid_get_notices, mcp__ku-portal__kupid_get_notice_detail, mcp__ku-portal__kupid_get_schedules, mcp__ku-portal__kupid_get_schedule_detail, mcp__ku-portal__kupid_get_scholarships, mcp__ku-portal__kupid_get_scholarship_detail, mcp__ku-portal__kupid_get_syllabus, mcp__ku-portal__kupid_get_timetable, mcp__ku-portal__kupid_my_courses, mcp__ku-portal__kupid_lms_assignments, mcp__ku-portal__kupid_lms_courses, mcp__ku-portal__kupid_lms_dashboard, mcp__ku-portal__kupid_lms_grades, mcp__ku-portal__kupid_lms_modules, mcp__ku-portal__kupid_lms_quizzes, mcp__ku-portal__kupid_lms_submissions, mcp__ku-portal__kupid_lms_todo, mcp__ku-portal__kupid_search, mcp__ku-portal__kupid_search_courses
+allowed-tools: mcp__ku-portal__kupid_login, mcp__ku-portal__kupid_get_library_seats, mcp__ku-portal__kupid_get_notices, mcp__ku-portal__kupid_get_notice_detail, mcp__ku-portal__kupid_dept_notices, mcp__ku-portal__kupid_dept_notice_detail, mcp__ku-portal__kupid_get_schedules, mcp__ku-portal__kupid_get_schedule_detail, mcp__ku-portal__kupid_get_scholarships, mcp__ku-portal__kupid_get_scholarship_detail, mcp__ku-portal__kupid_get_syllabus, mcp__ku-portal__kupid_get_timetable, mcp__ku-portal__kupid_my_courses, mcp__ku-portal__kupid_lms_assignments, mcp__ku-portal__kupid_lms_courses, mcp__ku-portal__kupid_lms_dashboard, mcp__ku-portal__kupid_lms_grades, mcp__ku-portal__kupid_lms_modules, mcp__ku-portal__kupid_lms_quizzes, mcp__ku-portal__kupid_lms_submissions, mcp__ku-portal__kupid_lms_todo, mcp__ku-portal__kupid_search, mcp__ku-portal__kupid_search_courses
 ---
 
 # 고려대 포털 (KUPID)
@@ -9,20 +9,20 @@ allowed-tools: mcp__ku-portal__kupid_login, mcp__ku-portal__kupid_get_library_se
 사용자 요청: $ARGUMENTS
 
 ## 공통 규칙
-- 모든 호출 전에 kupid_login으로 먼저 로그인 (세션 내 1회)
+- 도서관 좌석 조회를 제외한 모든 호출 전에 kupid_login으로 먼저 로그인 (세션 내 1회)
 - 결과는 한국어 테이블 형식으로 간결하게 정리
 - 날짜/시간은 KST 기준
 
 ## 동작 모드
 
 ### "도서관" 또는 인자 없음
-- kupid_get_library_seats로 도서관 좌석 현황 조회
+- kupid_get_library_seats로 도서관 좌석 현황 조회 (로그인 불필요)
 - 층별 잔여석 테이블로 보여줘
 
 ### "공지" [키워드]
-- kupid_get_notices로 최근 공지사항 목록 조회
+- kupid_get_notices로 학교 전체 공지 + kupid_dept_notices(site_name: "SW·AI융합대학원")로 소속 학과 공지를 병렬 조회
 - 키워드가 있으면 해당 키워드로 필터링
-- 상세 보기 요청 시 kupid_get_notice_detail 사용
+- 상세 보기 요청 시 kupid_get_notice_detail 또는 kupid_dept_notice_detail 사용
 
 ### "과제" 또는 "할일"
 - kupid_lms_todo로 마감 임박한 할일 조회
@@ -48,6 +48,9 @@ allowed-tools: mcp__ku-portal__kupid_login, mcp__ku-portal__kupid_get_library_se
 
 ### "일정" 또는 "학사일정"
 - kupid_get_schedules로 학사 일정 조회
+
+### "강의계획서" + 과목코드
+- kupid_get_syllabus로 강의계획서 조회
 
 ### "검색" + 키워드
 - kupid_search로 포털 통합 검색
