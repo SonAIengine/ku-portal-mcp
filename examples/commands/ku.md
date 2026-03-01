@@ -1,10 +1,10 @@
 ---
-description: "건국대 포털(KUPID) 통합 조회 — 도서관/공지/LMS/시간표/장학"
+description: "고려대 포털(KUPID) 통합 조회 — 도서관/공지/LMS/시간표/장학"
 argument-hint: "[도서관|공지|과제|성적|시간표|장학|검색] [상세 키워드]"
 allowed-tools: mcp__ku-portal__kupid_login, mcp__ku-portal__kupid_get_library_seats, mcp__ku-portal__kupid_get_notices, mcp__ku-portal__kupid_get_notice_detail, mcp__ku-portal__kupid_get_schedules, mcp__ku-portal__kupid_get_schedule_detail, mcp__ku-portal__kupid_get_scholarships, mcp__ku-portal__kupid_get_scholarship_detail, mcp__ku-portal__kupid_get_syllabus, mcp__ku-portal__kupid_get_timetable, mcp__ku-portal__kupid_my_courses, mcp__ku-portal__kupid_lms_assignments, mcp__ku-portal__kupid_lms_courses, mcp__ku-portal__kupid_lms_dashboard, mcp__ku-portal__kupid_lms_grades, mcp__ku-portal__kupid_lms_modules, mcp__ku-portal__kupid_lms_quizzes, mcp__ku-portal__kupid_lms_submissions, mcp__ku-portal__kupid_lms_todo, mcp__ku-portal__kupid_search, mcp__ku-portal__kupid_search_courses
 ---
 
-# 건국대 포털 (KUPID)
+# 고려대 포털 (KUPID)
 
 사용자 요청: $ARGUMENTS
 
