@@ -1,5 +1,7 @@
 # ku-portal-mcp
 
+> 고려대학교 SW.AI 융합대학원 61기 인공지능학과 손성준
+
 고려대학교 KUPID 포털을 [Claude Code](https://claude.ai/claude-code)에서 바로 사용할 수 있는 MCP (Model Context Protocol) 서버입니다.
 
 ## 기능
