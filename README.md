@@ -248,6 +248,30 @@ Claude Code에서 아래와 같이 자연어로 물어보세요:
 > 내 시간표 보여줘
 ```
 
+### 4. `/ku` 슬래시 커맨드 활용
+
+[`examples/commands/ku.md`](examples/commands/ku.md)를 Claude Code의 커스텀 슬래시 커맨드로 등록하면, `/ku` 한 줄로 포털 조회를 더 빠르게 할 수 있습니다.
+
+**설치:** `examples/commands/ku.md` 파일을 프로젝트의 `.claude/commands/` 또는 `~/.claude/commands/`에 복사합니다.
+
+```bash
+# 글로벌 커맨드로 등록 (모든 프로젝트에서 사용)
+mkdir -p ~/.claude/commands
+cp examples/commands/ku.md ~/.claude/commands/ku.md
+```
+
+**사용 예시:**
+```
+> /ku 도서관
+> /ku 공지 수강신청
+> /ku 과제
+> /ku 시간표
+> /ku 성적
+> /ku 검색 장학금
+```
+
+> 슬래시 커맨드는 필요한 MCP tool만 자동으로 허용하므로, 자연어 질의보다 빠르고 정확하게 동작합니다. 자세한 키워드 목록은 [`examples/commands/ku.md`](examples/commands/ku.md)를 참고하세요.
+
 ## 프로젝트 구조
 
 ```
