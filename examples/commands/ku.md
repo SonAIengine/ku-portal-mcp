@@ -55,6 +55,10 @@ allowed-tools: mcp__ku-portal__kupid_login, mcp__ku-portal__kupid_get_library_se
 
 ### "강의계획서" + 과목코드
 - kupid_get_syllabus로 강의계획서 조회
+- 학수번호(예: COSE101, AAI110)와 분반을 지정
+- 개설과목 목록에서 교수, 학점, 강의시간 등 기본 정보를 자동으로 추출
+- 대학원 과목(AAI 등)도 지원
+- 예: `/ku 강의계획서 AAI110`, `/ku COSE101 02분반 강의계획서`
 
 ### "검색" + 키워드
 - kupid_search로 포털 통합 검색
