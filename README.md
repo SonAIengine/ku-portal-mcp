@@ -192,44 +192,32 @@ pip install -e .
 
 ### 1. MCP 서버 등록
 
-`~/.claude/settings.json`의 `mcpServers`에 추가합니다:
+`claude mcp add` CLI 명령으로 등록합니다:
 
 **uvx 사용 (권장):**
-```json
-{
-  "mcpServers": {
-    "ku-portal": {
-      "command": "uvx",
-      "args": ["ku-portal-mcp"],
-      "env": {
-        "KU_PORTAL_ID": "your-kupid-id",
-        "KU_PORTAL_PW": "your-kupid-password"
-      }
-    }
-  }
-}
+```bash
+claude mcp add -s user \
+  -e KU_PORTAL_ID=your-kupid-id \
+  -e KU_PORTAL_PW=your-kupid-password \
+  ku-portal \
+  uvx ku-portal-mcp@latest
 ```
 
 **pip으로 설치한 경우:**
-```json
-{
-  "mcpServers": {
-    "ku-portal": {
-      "command": "ku-portal-mcp",
-      "env": {
-        "KU_PORTAL_ID": "your-kupid-id",
-        "KU_PORTAL_PW": "your-kupid-password"
-      }
-    }
-  }
-}
+```bash
+claude mcp add -s user \
+  -e KU_PORTAL_ID=your-kupid-id \
+  -e KU_PORTAL_PW=your-kupid-password \
+  ku-portal \
+  ku-portal-mcp
 ```
 
-> `KU_PORTAL_ID`와 `KU_PORTAL_PW`는 KUPID 포털 로그인에 사용하는 학번과 비밀번호입니다.
+> - `KU_PORTAL_ID`와 `KU_PORTAL_PW`는 KUPID 포털 로그인에 사용하는 학번과 비밀번호입니다.
+> - `-s user`는 글로벌(모든 프로젝트) 등록입니다. 특정 프로젝트에서만 사용하려면 `-s project`로 변경하세요.
 
 ### 2. 설정 적용
 
-MCP 서버 설정은 Claude Code **시작 시점에 1회** 로드되므로, `settings.json` 수정만으로는 즉시 반영되지 않습니다.
+MCP 서버 설정은 Claude Code **시작 시점에 1회** 로드됩니다.
 
 - **방법 A**: Claude Code를 재시작
 - **방법 B**: 세션 내에서 `/mcp` 명령어 실행 → MCP 서버 추가/재시작을 재시작 없이 바로 적용
@@ -310,28 +298,43 @@ ku_portal_mcp/
    ku-portal-mcp --version
    ```
 
-2. uvx 방식으로 전환 (권장):
-   ```json
-   {
-     "command": "uvx",
-     "args": ["ku-portal-mcp"]
-   }
+2. 서버가 등록되어 있는지 확인:
+   ```bash
+   claude mcp list
    ```
+   목록에 `ku-portal`이 없으면 [설치 > 1. MCP 서버 등록](#1-mcp-서버-등록)을 참고하세요.
 
-3. `python3 -m` 방식 시도:
-   ```json
-   {
-     "command": "python3",
-     "args": ["-m", "ku_portal_mcp"]
-   }
-   ```
+3. Claude Code 재시작 후 `/mcp` 명령으로 서버 상태 확인
 
-4. Claude Code 재시작 후 `/mcp` 명령으로 서버 상태 확인
+### MCP 서버가 목록에 보이지 않을 때
+
+Claude Code는 MCP 서버 설정을 `~/.claude.json`에서 읽습니다. `~/.claude/settings.json`의 `mcpServers`에 넣으면 **인식되지 않습니다.**
+
+반드시 `claude mcp add` 명령으로 등록하세요:
+```bash
+claude mcp add -s user \
+  -e KU_PORTAL_ID=your-id \
+  -e KU_PORTAL_PW=your-pw \
+  ku-portal \
+  uvx ku-portal-mcp@latest
+```
+
+### 서버 시작 시 타임아웃이 발생할 때
+
+서버 초기화에 수 초가 걸릴 수 있습니다. 기본 타임아웃이 짧아 연결 실패가 발생하면, `~/.claude/settings.json`의 `env`에 타임아웃을 늘려주세요:
+
+```json
+{
+  "env": {
+    "MCP_TIMEOUT": "30000"
+  }
+}
+```
 
 ### 환경변수 관련
 
-- `KU_PORTAL_ID`와 `KU_PORTAL_PW`가 settings.json의 `env`에 올바르게 설정되어 있는지 확인
-- `.env` 파일을 프로젝트 디렉토리에 생성해도 됩니다
+- `claude mcp add` 시 `-e` 옵션으로 환경변수를 설정합니다
+- 이미 등록된 서버의 환경변수를 변경하려면 `claude mcp remove ku-portal` 후 다시 추가하세요
 
 ## 라이선스
 
