@@ -89,7 +89,23 @@ KUPID 포털의 각종 게시판을 조회하고, 키워드로 검색할 수 있
 - 총 신청 학점 합산
 - 대학원 과목 포함 (기존 시간표/개설과목 검색으로 안 나오던 과목)
 
-### 5. 개설과목 검색 + 강의계획서
+### 5. 전체 성적 / 누적 GPA / 취득학점
+
+KUPID의 **전체성적조회** 화면에서 최종 확정 성적과 누계 성적을 확인합니다.
+
+```
+> 전체 성적 보여줘
+> 누적 GPA 얼마야?
+> 취득학점 얼마나 됐어?
+> 2024학년도 2학기 성적만 보여줘
+```
+
+- **최종 확정된 전체 성적** 조회 (년도/학기별 필터 지원)
+- 과목별 점수, 등급, 평점, 재수강 반영 여부 확인
+- **누적 GPA / 총평점 / 취득학점** 조회
+- 졸업요건 계산에 활용 가능한 원본 성적 데이터 제공
+
+### 6. 개설과목 검색 + 강의계획서
 
 학과/단과대별 개설 과목을 검색하고, 강의계획서를 조회합니다.
 
@@ -107,7 +123,7 @@ KUPID 포털의 각종 게시판을 조회하고, 키워드로 검색할 수 있
 - **강의계획서 조회**: 학수번호로 교수/학점/시간표 등 과목 정보 자동 추출 (90+ 학과 매핑)
 - 대학원 과목(AAI 등) 포함 지원
 
-### 6. Canvas LMS — 수강과목 / 과제 / 강의자료
+### 7. Canvas LMS — 수강과목 / 과제 / 강의자료
 
 고려대학교 Canvas LMS(mylms.korea.ac.kr)에 접속하여 수강 정보를 조회합니다.
 
@@ -153,14 +169,15 @@ KUPID 포털의 각종 게시판을 조회하고, 키워드로 검색할 수 있
 | 11 | `kupid_search_courses` | 개설과목 검색 (단과대/학과별) | SSO |
 | 12 | `kupid_get_syllabus` | 강의계획서 조회 | SSO |
 | 13 | `kupid_my_courses` | 내 수강신청 내역 (학수번호/시간/강의실) | SSO |
-| 14 | `kupid_lms_courses` | LMS 수강과목 목록 | KSSO |
-| 15 | `kupid_lms_assignments` | LMS 과제 목록 (과목별) | KSSO |
-| 16 | `kupid_lms_modules` | LMS 강의자료 (주차별 모듈) | KSSO |
-| 17 | `kupid_lms_todo` | LMS 할 일 / 다가오는 이벤트 | KSSO |
-| 18 | `kupid_lms_dashboard` | LMS 대시보드 + 공지사항 | KSSO |
-| 19 | `kupid_lms_grades` | LMS 성적/점수 조회 | KSSO |
-| 20 | `kupid_lms_submissions` | LMS 과제 제출 현황 | KSSO |
-| 21 | `kupid_lms_quizzes` | LMS 퀴즈/시험 목록 | KSSO |
+| 14 | `kupid_get_all_grades` | 전체 성적 / 누적 GPA / 취득학점 조회 | SSO |
+| 15 | `kupid_lms_courses` | LMS 수강과목 목록 | KSSO |
+| 16 | `kupid_lms_assignments` | LMS 과제 목록 (과목별) | KSSO |
+| 17 | `kupid_lms_modules` | LMS 강의자료 (주차별 모듈) | KSSO |
+| 18 | `kupid_lms_todo` | LMS 할 일 / 다가오는 이벤트 | KSSO |
+| 19 | `kupid_lms_dashboard` | LMS 대시보드 + 공지사항 | KSSO |
+| 20 | `kupid_lms_grades` | LMS 성적/점수 조회 | KSSO |
+| 21 | `kupid_lms_submissions` | LMS 과제 제출 현황 | KSSO |
+| 22 | `kupid_lms_quizzes` | LMS 퀴즈/시험 목록 | KSSO |
 
 > **인증 안내**: SSO = KUPID 포털 인증, KSSO = 고려대 통합 SSO (Canvas LMS용). 모두 같은 ID/PW를 사용하며, 환경변수만 설정하면 자동으로 로그인됩니다.
 
@@ -272,6 +289,7 @@ ku_portal_mcp/
 ├── library.py     # 도서관 좌석 현황 (librsv.korea.ac.kr)
 ├── timetable.py   # 수업시간표 + ICS export
 ├── courses.py     # 개설과목 검색, 강의계획서 (infodepot.korea.ac.kr)
+├── grades.py      # 전체 성적 / 누적 GPA / 취득학점
 └── lms.py         # Canvas LMS 연동 (mylms.korea.ac.kr, KSSO SAML)
 ```
 

@@ -23,6 +23,7 @@ import httpx
 from dotenv import load_dotenv
 from mcp.server.fastmcp import FastMCP
 
+from .academic import resolve_year_semester
 from .auth import login, clear_session, Session
 from .scraper import fetch_notice_list, fetch_notice_detail, NoticeItem
 from .library import (
@@ -38,6 +39,7 @@ from .courses import (
 )
 from .dept_notices import fetch_dept_notice_list, fetch_dept_notice_detail
 from .dept_registry import resolve_site, list_all_sites, DEFAULT_SITES
+from .grades import fetch_all_grades
 from .lms import (
     lms_login, LMSSession, _clear_lms_session,
     fetch_lms_courses, fetch_lms_assignments, fetch_lms_modules,
@@ -463,8 +465,8 @@ async def kupid_get_timetable(day: str = "all", ics_export: bool = False) -> dic
 
 @server.tool()
 async def kupid_search_courses(
-    year: str = "2026",
-    semester: str = "1",
+    year: str = "",
+    semester: str = "",
     college: str = "",
     department: str = "",
     campus: str = "1",
@@ -475,13 +477,15 @@ async def kupid_search_courses(
     단과대 코드가 비어있으면 사용 가능한 단과대 목록을 반환합니다.
 
     Args:
-        year: 학년도 (기본값: "2026")
+        year: 학년도 (기본값: 현재 학기 기준 자동 선택)
         semester: 학기 ("1"=1학기, "2"=2학기, "summer"=여름학기, "winter"=겨울학기)
         college: 단과대 코드 (예: "5720"=정보대학, ""이면 코드 목록 반환)
         department: 학과 코드 (예: "5722"=컴퓨터학과, ""이면 학과 목록 반환)
         campus: 캠퍼스 ("1"=서울, "2"=세종)
     """
     try:
+        year, semester = resolve_year_semester(year, semester)
+
         # If no college specified, return available colleges
         if not college:
             return {
@@ -540,18 +544,20 @@ async def kupid_search_courses(
 async def kupid_get_syllabus(
     course_code: str,
     section: str = "00",
-    year: str = "2026",
-    semester: str = "1",
+    year: str = "",
+    semester: str = "",
 ) -> dict[str, Any]:
     """강의계획서를 조회합니다 (SSO 로그인 필요).
 
     Args:
         course_code: 학수번호 (예: "COSE101")
         section: 분반 (예: "02")
-        year: 학년도 (기본값: "2026")
+        year: 학년도 (기본값: 현재 학기 기준 자동 선택)
         semester: 학기 ("1"=1학기, "2"=2학기, "summer"=여름학기, "winter"=겨울학기)
     """
     try:
+        year, semester = resolve_year_semester(year, semester)
+
         async def _fetch(session):
             return await fetch_syllabus(
                 session, course_code=course_code, section=section,
@@ -584,17 +590,19 @@ async def kupid_get_syllabus(
 # ──────────────────────────────────────────────
 
 @server.tool()
-async def kupid_my_courses(year: str = "2026", semester: str = "1") -> dict[str, Any]:
+async def kupid_my_courses(year: str = "", semester: str = "") -> dict[str, Any]:
     """내 수강신청 내역을 조회합니다 (SSO 로그인 필요).
 
     학수번호, 강의시간, 강의실, 교수, 학점, 이수구분 등 상세 정보를 반환합니다.
     대학원 과목도 포함됩니다.
 
     Args:
-        year: 학년도 (기본값: "2026")
+        year: 학년도 (기본값: 현재 학기 기준 자동 선택)
         semester: 학기 ("1"=1학기, "2"=2학기, "summer"=여름학기, "winter"=겨울학기)
     """
     try:
+        year, semester = resolve_year_semester(year, semester)
+
         async def _fetch(session):
             return await fetch_my_courses(session, year=year, semester=semester)
 
@@ -625,6 +633,85 @@ async def kupid_my_courses(year: str = "2026", semester: str = "1") -> dict[str,
     except Exception as e:
         logger.error(f"Failed to fetch my courses: {e}")
         return {"success": False, "message": f"수강신청 내역 조회 실패: {e}"}
+
+
+@server.tool()
+async def kupid_get_all_grades(year_term: str = "") -> dict[str, Any]:
+    """전체 성적, 누적 GPA, 취득학점을 조회합니다 (SSO 로그인 필요).
+
+    KUPID 학적/졸업 > 성적사항 > 전체성적조회 화면의 최종 확정 성적을 가져옵니다.
+
+    Args:
+        year_term: 조회할 학년도/학기 코드 (예: "20242R"). 비우면 전체 조회
+    """
+    try:
+        async def _fetch(session):
+            return await fetch_all_grades(session, year_term=year_term)
+
+        page = await _with_retry(_fetch)
+        latest_summary = page.summaries[-1] if page.summaries else None
+
+        return {
+            "success": True,
+            "year_term": year_term or None,
+            "available_year_terms": page.available_year_terms,
+            "record_count": len(page.records),
+            "records": [
+                {
+                    "year": record.year,
+                    "term": record.term,
+                    "course_code": record.course_code,
+                    "course_name": record.course_name,
+                    "completion_type": record.completion_type,
+                    "course_type": record.course_type,
+                    "credits": record.credits,
+                    "score": record.score,
+                    "grade": record.grade,
+                    "gpa": record.gpa,
+                    "retake_year": record.retake_year,
+                    "retake_term": record.retake_term,
+                    "retake_course": record.retake_course,
+                    "deletion_type": record.deletion_type,
+                }
+                for record in page.records
+            ],
+            "summary_count": len(page.summaries),
+            "summaries": [
+                {
+                    "year": summary.year,
+                    "term": summary.term,
+                    "major_registered_credits": summary.major_registered_credits,
+                    "major_earned_credits": summary.major_earned_credits,
+                    "prerequisite_earned_credits": summary.prerequisite_earned_credits,
+                    "research_earned_credits": summary.research_earned_credits,
+                    "total_grade_points": summary.total_grade_points,
+                    "official_gpa": summary.official_gpa,
+                    "overall_gpa": summary.overall_gpa,
+                    "official_converted_score": summary.official_converted_score,
+                    "rank_for_certificate": summary.rank_for_certificate,
+                }
+                for summary in page.summaries
+            ],
+            "latest_summary": (
+                {
+                    "year": latest_summary.year,
+                    "term": latest_summary.term,
+                    "major_registered_credits": latest_summary.major_registered_credits,
+                    "major_earned_credits": latest_summary.major_earned_credits,
+                    "prerequisite_earned_credits": latest_summary.prerequisite_earned_credits,
+                    "research_earned_credits": latest_summary.research_earned_credits,
+                    "total_grade_points": latest_summary.total_grade_points,
+                    "official_gpa": latest_summary.official_gpa,
+                    "overall_gpa": latest_summary.overall_gpa,
+                    "official_converted_score": latest_summary.official_converted_score,
+                    "rank_for_certificate": latest_summary.rank_for_certificate,
+                }
+                if latest_summary else None
+            ),
+        }
+    except Exception as e:
+        logger.error(f"Failed to fetch all grades: {e}")
+        return {"success": False, "message": f"전체 성적 조회 실패: {e}"}
 
 
 # ──────────────────────────────────────────────

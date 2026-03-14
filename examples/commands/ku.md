@@ -1,7 +1,7 @@
 ---
 description: "고려대 포털(KUPID) 통합 조회 — 도서관/공지/LMS/시간표/장학"
 argument-hint: "[도서관|공지|과제|성적|시간표|장학|검색] [상세 키워드]"
-allowed-tools: mcp__ku-portal__kupid_login, mcp__ku-portal__kupid_get_library_seats, mcp__ku-portal__kupid_get_notices, mcp__ku-portal__kupid_get_notice_detail, mcp__ku-portal__kupid_dept_notices, mcp__ku-portal__kupid_dept_notice_detail, mcp__ku-portal__kupid_get_schedules, mcp__ku-portal__kupid_get_schedule_detail, mcp__ku-portal__kupid_get_scholarships, mcp__ku-portal__kupid_get_scholarship_detail, mcp__ku-portal__kupid_get_syllabus, mcp__ku-portal__kupid_get_timetable, mcp__ku-portal__kupid_my_courses, mcp__ku-portal__kupid_lms_assignments, mcp__ku-portal__kupid_lms_courses, mcp__ku-portal__kupid_lms_dashboard, mcp__ku-portal__kupid_lms_grades, mcp__ku-portal__kupid_lms_modules, mcp__ku-portal__kupid_lms_quizzes, mcp__ku-portal__kupid_lms_submissions, mcp__ku-portal__kupid_lms_todo, mcp__ku-portal__kupid_search, mcp__ku-portal__kupid_search_courses
+allowed-tools: mcp__ku-portal__kupid_login, mcp__ku-portal__kupid_get_library_seats, mcp__ku-portal__kupid_get_notices, mcp__ku-portal__kupid_get_notice_detail, mcp__ku-portal__kupid_dept_notices, mcp__ku-portal__kupid_dept_notice_detail, mcp__ku-portal__kupid_get_schedules, mcp__ku-portal__kupid_get_schedule_detail, mcp__ku-portal__kupid_get_scholarships, mcp__ku-portal__kupid_get_scholarship_detail, mcp__ku-portal__kupid_get_syllabus, mcp__ku-portal__kupid_get_timetable, mcp__ku-portal__kupid_my_courses, mcp__ku-portal__kupid_get_all_grades, mcp__ku-portal__kupid_lms_assignments, mcp__ku-portal__kupid_lms_courses, mcp__ku-portal__kupid_lms_dashboard, mcp__ku-portal__kupid_lms_grades, mcp__ku-portal__kupid_lms_modules, mcp__ku-portal__kupid_lms_quizzes, mcp__ku-portal__kupid_lms_submissions, mcp__ku-portal__kupid_lms_todo, mcp__ku-portal__kupid_search, mcp__ku-portal__kupid_search_courses
 ---
 
 # 고려대 포털 (KUPID)
@@ -34,8 +34,9 @@ allowed-tools: mcp__ku-portal__kupid_login, mcp__ku-portal__kupid_get_library_se
 - 마감일 기준 정렬, D-day 표시
 
 ### "성적"
-- kupid_lms_grades로 성적 조회
-- 과목별 성적 테이블로 정리
+- kupid_get_all_grades로 공식 전체 성적 / 누적 GPA / 취득학점 조회
+- kupid_lms_grades로 Canvas 현재 점수 보조 조회
+- 누적 평점과 과목별 현재 점수를 구분해서 정리
 
 ### "시간표"
 - kupid_my_courses로 수강신청 내역 조회 (학수번호, 교수, 강의실, 시간 등 상세 정보)

@@ -11,6 +11,7 @@ from dataclasses import dataclass
 import httpx
 from bs4 import BeautifulSoup
 
+from .academic import resolve_year_semester
 from .auth import Session, PORTAL_BASE, _BROWSER_HEADERS
 
 logger = logging.getLogger(__name__)
@@ -83,12 +84,13 @@ async def _establish_infodepot_session(
 
 
 async def fetch_departments(
-    session: Session, college_code: str, year: str, term: str
+    session: Session, college_code: str, year: str | None = None, term: str | None = None
 ) -> list[dict]:
     """Fetch department list for a college.
 
     Returns list of {"code": "5722", "name": "컴퓨터학과"} dicts.
     """
+    year, term = resolve_year_semester(year, term)
     term_code = TERM_CODES.get(term, term)
 
     async with httpx.AsyncClient(timeout=30.0, follow_redirects=True) as client:
@@ -124,8 +126,8 @@ async def fetch_departments(
 
 async def search_courses(
     session: Session,
-    year: str = "2026",
-    semester: str = "1",
+    year: str | None = None,
+    semester: str | None = None,
     campus: str = "1",
     college: str = "",
     department: str = "",
@@ -134,7 +136,7 @@ async def search_courses(
 
     Args:
         session: Valid KUPID session.
-        year: Academic year (e.g., "2026").
+        year: Academic year (e.g., "2027").
         semester: "1", "2", "summer", "winter".
         campus: "1" (Seoul) or "2" (Sejong).
         college: College code (e.g., "5720" for 정보대학).
@@ -143,6 +145,7 @@ async def search_courses(
     Returns:
         List of CourseInfo objects.
     """
+    year, semester = resolve_year_semester(year, semester)
     term_code = TERM_CODES.get(semester, semester)
 
     async with httpx.AsyncClient(timeout=30.0, follow_redirects=True) as client:
@@ -206,8 +209,8 @@ async def fetch_syllabus(
     session: Session,
     course_code: str,
     section: str = "00",
-    year: str = "2026",
-    semester: str = "1",
+    year: str | None = None,
+    semester: str | None = None,
     grad_code: str = "",
 ) -> str:
     """Fetch syllabus (강의계획서) for a course.
@@ -228,6 +231,7 @@ async def fetch_syllabus(
     Returns:
         Syllabus text content.
     """
+    year, semester = resolve_year_semester(year, semester)
     term_code = TERM_CODES.get(semester, semester)
 
     async with httpx.AsyncClient(timeout=30.0, follow_redirects=True) as client:
@@ -588,19 +592,20 @@ def _parse_report_html(html: str) -> str:
 
 async def fetch_my_courses(
     session: Session,
-    year: str = "2026",
-    semester: str = "1",
+    year: str | None = None,
+    semester: str | None = None,
 ) -> tuple[list[EnrolledCourse], str]:
     """Fetch enrolled courses from infodepot CourseListSearch.
 
     Args:
         session: Valid KUPID session.
-        year: Academic year (e.g., "2026").
+        year: Academic year (e.g., "2027").
         semester: "1", "2", "summer", "winter".
 
     Returns:
         Tuple of (list of EnrolledCourse, total_credits string).
     """
+    year, semester = resolve_year_semester(year, semester)
     term_code = TERM_CODES.get(semester, semester)
     yt = f"{year}{term_code}"
 
@@ -640,17 +645,17 @@ def _parse_enrolled_courses(html: str) -> tuple[list[EnrolledCourse], str]:
     if credits_match:
         total_credits = credits_match.group(1)
 
-    # Build a map of course_code -> (grad_code, dept_code) from f_go() links
-    fgo_map: dict[str, tuple[str, str]] = {}
+    # Build a map of (course_code, section) -> (grad_code, dept_code) from f_go() links
+    fgo_map: dict[tuple[str, str], tuple[str, str]] = {}
     for a_tag in soup.find_all("a", href=re.compile(r"javascript:f_go")):
         onclick = a_tag.get("href", "")
-        # f_go('2026','1R','7298','7313','AAI110','00','딥러닝')
+        # f_go('YYYY','1R','7298','7313','AAI110','00','딥러닝')
         m = re.search(
-            r"f_go\(\s*'[^']*'\s*,\s*'[^']*'\s*,\s*'(\w+)'\s*,\s*'(\w+)'\s*,\s*'(\w+)'",
+            r"f_go\(\s*'[^']*'\s*,\s*'[^']*'\s*,\s*'(\w+)'\s*,\s*'(\w+)'\s*,\s*'(\w+)'\s*,\s*'(\w+)'",
             onclick,
         )
         if m:
-            fgo_map[m.group(3)] = (m.group(1), m.group(2))
+            fgo_map[(m.group(3), m.group(4))] = (m.group(1), m.group(2))
 
     # Find the main data table (11-column course table)
     for table in soup.find_all("table"):
@@ -670,7 +675,8 @@ def _parse_enrolled_courses(html: str) -> tuple[list[EnrolledCourse], str]:
                 continue
 
             course_code = cell_texts[1]
-            grad_code, dept_code = fgo_map.get(course_code, ("", ""))
+            section = cell_texts[2] if len(cell_texts) > 2 else ""
+            grad_code, dept_code = fgo_map.get((course_code, section), ("", ""))
 
             retake_text = cell_texts[8] if len(cells) > 8 else ""
             retake = retake_text in ("Y", "재수강")
@@ -678,7 +684,7 @@ def _parse_enrolled_courses(html: str) -> tuple[list[EnrolledCourse], str]:
             courses.append(
                 EnrolledCourse(
                     course_code=course_code,
-                    section=cell_texts[2],
+                    section=section,
                     course_type=cell_texts[3],
                     course_name=cell_texts[4],
                     professor=cell_texts[5],

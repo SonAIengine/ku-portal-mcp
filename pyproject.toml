@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "ku-portal-mcp"
-version = "0.6.3"
+version = "0.7.0"
 description = "MCP server for Korea University KUPID portal - notices, schedules, scholarships, library, timetable, courses, Canvas LMS, and department notices"
 readme = "README.md"
 requires-python = ">=3.10"
@@ -32,6 +32,11 @@ dependencies = [
     "cryptography>=42.0.0",
 ]
 
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0.0",
+]
+
 [project.urls]
 Homepage = "https://github.com/SonAIengine/ku-portal-mcp"
 Repository = "https://github.com/SonAIengine/ku-portal-mcp"
@@ -42,3 +47,8 @@ ku-portal-mcp = "ku_portal_mcp.server:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["ku_portal_mcp"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+addopts = "-q"

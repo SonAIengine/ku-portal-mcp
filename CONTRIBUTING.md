@@ -16,11 +16,17 @@ python3 -m venv .venv
 source .venv/bin/activate
 
 # 3. 개발 모드 설치
-pip install -e .
+pip install -e ".[dev]"
 
 # 4. 환경변수 설정 (테스트 시 필요)
 cp .env.example .env
 # .env 파일에 KUPID 계정 정보 입력
+```
+
+### 테스트 실행
+
+```bash
+pytest
 ```
 
 ### 요구사항

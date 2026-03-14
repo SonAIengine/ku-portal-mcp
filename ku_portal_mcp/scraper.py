@@ -60,10 +60,13 @@ async def fetch_notice_list(
     session: Session, kind: str, page: int = 1, count: int = 20
 ) -> list[NoticeItem]:
     """Fetch notice/schedule list page and parse items."""
+    page = max(page, 1)
+    count = max(count, 1)
     url = (
         f"{GRW_BASE}/GroupWare/user/NoticeList.jsp"
         f"?kind={kind}&compId=148&menuCd=340&language=ko"
         f"&frame=&token={session.ssotoken}&orgtoken={session.ssotoken}"
+        f"&hdCurrPage={page}&hdListCount={count}"
     )
     cookie_str = _build_cookie_string(session)
 
@@ -81,9 +84,11 @@ async def fetch_notice_list(
     html = _decode_euckr(resp)
 
     if kind == "89":
-        return _parse_schedule_list(html, kind)
+        items = _parse_schedule_list(html, kind)
     else:
-        return _parse_notice_list(html, kind)
+        items = _parse_notice_list(html, kind)
+
+    return items[:count]
 
 
 def _parse_notice_list(html: str, kind: str) -> list[NoticeItem]:

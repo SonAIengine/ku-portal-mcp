@@ -43,6 +43,33 @@ ku-portal-mcp의 다양한 활용 예시를 소개합니다.
 → 텍스트마이닝: 목(7-8) 우정정보관 202호
 ```
 
+## 전체 성적 / 누적 GPA 조회
+
+최종 확정된 전체 성적과 누계 성적을 조회합니다.
+
+```
+> 전체 성적 보여줘
+> 누적 GPA 얼마야?
+> 취득학점 얼마나 됐어?
+> 2024학년도 2학기 성적만 보여줘
+```
+
+```json
+{
+  "success": true,
+  "year_term": null,
+  "record_count": 12,
+  "summary_count": 8,
+  "latest_summary": {
+    "year": "2025",
+    "term": "2학기",
+    "major_registered_credits": "24",
+    "major_earned_credits": "21",
+    "overall_gpa": "4.12"
+  }
+}
+```
+
 ## 공지사항 조회 + 검색
 
 ```
