@@ -710,3 +710,126 @@ def _parse_syllabus_html(html: str) -> str:
     text = soup.get_text(separator="\n", strip=True)
     text = re.sub(r"\n{3,}", "\n\n", text)
     return text.strip()
+
+
+def parse_syllabus_structured(html: str) -> dict:
+    """Parse infodepot syllabus HTML into structured dict.
+
+    Returns dict with keys: course_info, professor, assistant, grading,
+    learning_plan, weekly_schedule.
+    """
+    soup = BeautifulSoup(html, "lxml")
+
+    for tag in soup.find_all(["script", "style"]):
+        tag.decompose()
+
+    result: dict = {}
+
+    # --- 수업정보 ---
+    course_info: dict[str, str] = {}
+    info_span = soup.find("span", string=re.compile(r"수업정보"))
+    if info_span:
+        table = info_span.find_next("table")
+        if table:
+            for row in table.find_all("tr"):
+                ths = row.find_all("th")
+                tds = row.find_all("td")
+                for th, td in zip(ths, tds):
+                    key = th.get_text(strip=True)
+                    val = td.get_text(strip=True)
+                    if key and val:
+                        course_info[key] = val
+    if course_info:
+        result["course_info"] = course_info
+
+    # --- 강의담당자 ---
+    def _parse_person_table(label: str) -> dict[str, str]:
+        span = soup.find("span", string=re.compile(label))
+        if not span:
+            return {}
+        table = span.find_next("table")
+        if not table:
+            return {}
+        person: dict[str, str] = {}
+        for row in table.find_all("tr"):
+            ths = row.find_all("th")
+            tds = row.find_all("td")
+            for th, td in zip(ths, tds):
+                key = th.get_text(strip=True)
+                val = td.get_text(strip=True)
+                if key and val:
+                    person[key] = val
+        return person
+
+    professor = _parse_person_table("강의담당자")
+    if professor:
+        result["professor"] = professor
+
+    assistant = _parse_person_table("조교정보")
+    if assistant:
+        result["assistant"] = assistant
+
+    # --- 평가방법 ---
+    grading: dict[str, str] = {}
+    grade_span = soup.find("span", string=re.compile(r"평가방법"))
+    if grade_span:
+        table = grade_span.find_next("table")
+        if table:
+            for row in table.find_all("tr"):
+                th = row.find("th")
+                td = row.find("td")
+                if th and td:
+                    key = th.get_text(strip=True)
+                    val = td.get_text(strip=True)
+                    if key and val:
+                        grading[key] = val
+    if grading:
+        result["grading"] = grading
+
+    # --- 학습계획 (과목개요, 학습목표, 선수과목, 교재, 과제물) ---
+    learning_plan: dict[str, str] = {}
+    plan_fields = ["과목개요", "학습목표", "추천 선수과목 및 수강요건", "수업자료(교재)", "과제물"]
+    for field in plan_fields:
+        th = soup.find("th", string=re.compile(re.escape(field)))
+        if not th:
+            continue
+        # th가 thead 안에 있으면 tbody에서 td를 찾음
+        thead = th.find_parent("thead")
+        if thead:
+            tbody = thead.find_next_sibling("tbody")
+            td = tbody.find("td") if tbody else None
+        else:
+            row = th.find_parent("tr")
+            td = row.find_next_sibling("tr").find("td") if row and row.find_next_sibling("tr") else None
+        if td:
+            for br in td.find_all("br"):
+                br.replace_with("\n")
+            text = td.get_text(strip=True)
+            if text:
+                learning_plan[field] = text
+    if learning_plan:
+        result["learning_plan"] = learning_plan
+
+    # --- 주별학습내용 ---
+    weekly: list[dict[str, str]] = []
+    week_span = soup.find("span", string=re.compile(r"주별학습내용"))
+    if week_span:
+        table = week_span.find_next("table")
+        if table:
+            for row in table.find("tbody", recursive=False).find_all("tr") if table.find("tbody") else []:
+                cells = [td.get_text(strip=True) for td in row.find_all("td")]
+                if len(cells) >= 4 and cells[0].isdigit():
+                    entry: dict[str, str] = {
+                        "week": cells[0],
+                        "period": cells[1],
+                        "topic": cells[3],
+                    }
+                    if len(cells) > 4 and cells[4]:
+                        entry["textbook"] = cells[4]
+                    if len(cells) > 5 and cells[5]:
+                        entry["note"] = cells[5]
+                    weekly.append(entry)
+    if weekly:
+        result["weekly_schedule"] = weekly
+
+    return result

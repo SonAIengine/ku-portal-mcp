@@ -507,3 +507,24 @@ async def fetch_lms_quizzes(
             return []
         resp.raise_for_status()
         return resp.json()
+
+
+async def fetch_lms_syllabus(
+    session: LMSSession,
+    course_id: int,
+) -> dict:
+    """Fetch syllabus (수업 계획서) for a course.
+
+    Uses Canvas API to get the syllabus_body HTML content.
+    """
+    async with _api_client(session) as client:
+        params: list[tuple[str, str]] = [
+            ("include[]", "syllabus_body"),
+            ("include[]", "term"),
+        ]
+        resp = await client.get(
+            f"/api/v1/courses/{course_id}",
+            params=params,  # type: ignore[arg-type]
+        )
+        resp.raise_for_status()
+        return resp.json()

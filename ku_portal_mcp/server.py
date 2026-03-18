@@ -13,6 +13,7 @@ Provides tools for accessing Korea University portal (KUPID):
 """
 
 import asyncio
+import re
 import sys
 import logging
 from dataclasses import asdict
@@ -46,6 +47,7 @@ from .lms import (
     fetch_lms_todo, fetch_lms_upcoming_events, fetch_lms_dashboard,
     fetch_lms_announcements, fetch_lms_grades, fetch_lms_submissions,
     fetch_lms_quizzes,
+    fetch_lms_syllabus,
 )
 from . import __version__
 
@@ -1175,6 +1177,120 @@ async def kupid_lms_quizzes(course_id: int) -> dict[str, Any]:
     except Exception as e:
         logger.error(f"Failed to fetch LMS quizzes: {e}")
         return {"success": False, "message": f"LMS 퀴즈 조회 실패: {e}"}
+
+
+@server.tool()
+async def kupid_lms_syllabus(course_code: str = "", course_id: int = 0) -> dict[str, Any]:
+    """Canvas LMS 수업 계획서(syllabus)를 조회합니다.
+
+    과목의 수업 계획서 내용을 가져옵니다.
+    course_code(예: BDC115) 또는 course_id 중 하나를 입력하세요.
+    course_code를 입력하면 수강과목 목록에서 자동으로 course_id를 찾습니다.
+
+    Args:
+        course_code: 과목코드 (예: BDC115). course_id 대신 사용 가능
+        course_id: 과목 ID (kupid_lms_courses의 id 필드). course_code 대신 사용 가능
+    """
+    from bs4 import BeautifulSoup
+
+    if not course_code and not course_id:
+        return {"success": False, "message": "course_code 또는 course_id 중 하나를 입력하세요."}
+
+    try:
+        # course_code로 조회 시 course_id 찾기
+        if course_code and not course_id:
+            courses = await _lms_with_retry(fetch_lms_courses)
+            keyword = course_code.upper()
+            matched = [
+                c for c in courses
+                if keyword in (c.get("course_code") or "").upper()
+                or keyword in (c.get("name") or "").upper()
+            ]
+            if not matched:
+                # Fallback: 학수번호로 infodepot 수강과목에서 과목명 찾아 재매칭
+                try:
+                    session = await _get_session()
+                    enrolled, _ = await fetch_my_courses(session)
+                    enrolled_match = [e for e in enrolled if keyword == e.course_code.upper()]
+                    if enrolled_match:
+                        enroll_name = enrolled_match[0].course_name
+                        matched = [c for c in courses if enroll_name in (c.get("name") or "")]
+                except Exception:
+                    pass
+
+            if not matched:
+                return {
+                    "success": False,
+                    "message": f"'{course_code}'에 해당하는 수강과목을 찾을 수 없습니다. "
+                    "kupid_lms_courses로 수강과목 목록을 확인하세요.",
+                }
+            if len(matched) > 1:
+                return {
+                    "success": False,
+                    "message": f"'{course_code}'에 해당하는 과목이 {len(matched)}개 있습니다. course_id를 지정하세요.",
+                    "candidates": [
+                        {"id": c.get("id"), "name": c.get("name"), "course_code": c.get("course_code")}
+                        for c in matched
+                    ],
+                }
+            course_id = matched[0]["id"]
+
+        async def _fetch(session, cid=course_id):
+            return await fetch_lms_syllabus(session, cid)
+
+        course_data = await _lms_with_retry(_fetch)
+
+        syllabus_html = course_data.get("syllabus_body") or ""
+        syllabus_text = ""
+
+        if syllabus_html:
+            soup = BeautifulSoup(syllabus_html, "lxml")
+
+            # iframe이 infodepot을 가리키면 직접 fetch하여 구조화된 데이터 반환
+            iframe = soup.find("iframe", src=re.compile(r"infodepot\.korea\.ac\.kr"))
+            if iframe:
+                iframe_src = iframe.get("src", "")
+                try:
+                    from .courses import _establish_infodepot_session, parse_syllabus_structured, INFODEPOT_BASE
+                    from .auth import _BROWSER_HEADERS
+
+                    session = await _get_session()
+                    async with httpx.AsyncClient(timeout=30.0, follow_redirects=True) as client:
+                        await _establish_infodepot_session(client, session)
+                        resp = await client.get(
+                            iframe_src,
+                            headers={**_BROWSER_HEADERS, "referer": f"{INFODEPOT_BASE}/lecture/LecMajorSub.jsp"},
+                        )
+                        html = resp.content.decode("euc-kr", errors="replace")
+                        structured = parse_syllabus_structured(html)
+                        if structured:
+                            return {
+                                "success": True,
+                                "course_id": course_id,
+                                "course_name": course_data.get("name"),
+                                "course_code": course_data.get("course_code"),
+                                "term": course_data.get("term", {}).get("name") if course_data.get("term") else None,
+                                "syllabus_url": f"https://mylms.korea.ac.kr/courses/{course_id}/assignments/syllabus",
+                                **structured,
+                            }
+                except Exception as e:
+                    logger.debug(f"Failed to fetch iframe content: {e}")
+
+            if not syllabus_text:
+                syllabus_text = soup.get_text(separator="\n", strip=True)
+
+        return {
+            "success": True,
+            "course_id": course_id,
+            "course_name": course_data.get("name"),
+            "course_code": course_data.get("course_code"),
+            "term": course_data.get("term", {}).get("name") if course_data.get("term") else None,
+            "syllabus_url": f"https://mylms.korea.ac.kr/courses/{course_id}/assignments/syllabus",
+            "syllabus": syllabus_text if syllabus_text else "(수업 계획서가 비어 있습니다)",
+        }
+    except Exception as e:
+        logger.error(f"Failed to fetch LMS syllabus: {e}")
+        return {"success": False, "message": f"LMS 수업 계획서 조회 실패: {e}"}
 
 
 def main():
