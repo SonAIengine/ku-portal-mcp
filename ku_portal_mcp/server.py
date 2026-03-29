@@ -1250,6 +1250,10 @@ async def kupid_lms_syllabus(course_code: str = "", course_id: int = 0) -> dict[
             iframe = soup.find("iframe", src=re.compile(r"infodepot\.korea\.ac\.kr"))
             if iframe:
                 iframe_src = iframe.get("src", "")
+                from urllib.parse import urlparse
+                parsed = urlparse(iframe_src)
+                if parsed.scheme not in ("http", "https") or not parsed.netloc.endswith(".korea.ac.kr"):
+                    raise ValueError(f"Untrusted iframe src: {iframe_src!r}")
                 try:
                     from .courses import _establish_infodepot_session, parse_syllabus_structured, INFODEPOT_BASE
                     from .auth import _BROWSER_HEADERS
@@ -1276,8 +1280,7 @@ async def kupid_lms_syllabus(course_code: str = "", course_id: int = 0) -> dict[
                 except Exception as e:
                     logger.debug(f"Failed to fetch iframe content: {e}")
 
-            if not syllabus_text:
-                syllabus_text = soup.get_text(separator="\n", strip=True)
+            syllabus_text = soup.get_text(separator="\n", strip=True)
 
         return {
             "success": True,

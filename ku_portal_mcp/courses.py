@@ -816,7 +816,8 @@ def parse_syllabus_structured(html: str) -> dict:
     if week_span:
         table = week_span.find_next("table")
         if table:
-            for row in table.find("tbody", recursive=False).find_all("tr") if table.find("tbody") else []:
+            tbody = table.find("tbody")
+            for row in (tbody.find_all("tr") if tbody else []):
                 cells = [td.get_text(strip=True) for td in row.find_all("td")]
                 if len(cells) >= 4 and cells[0].isdigit():
                     entry: dict[str, str] = {
