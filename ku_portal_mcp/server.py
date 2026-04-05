@@ -28,26 +28,41 @@ from .academic import resolve_year_semester
 from .auth import login, clear_session, Session
 from .scraper import fetch_notice_list, fetch_notice_detail, NoticeItem
 from .library import (
-    fetch_library_seats, fetch_all_seats,
+    fetch_library_seats,
+    fetch_all_seats,
     LIBRARY_CODES,
 )
 from .timetable import (
-    fetch_timetable_day, fetch_full_timetable, timetable_to_ics,
+    fetch_timetable_day,
+    fetch_full_timetable,
+    timetable_to_ics,
 )
 from .courses import (
-    search_courses, fetch_syllabus, fetch_departments,
-    fetch_my_courses, COLLEGE_CODES,
+    search_courses,
+    fetch_syllabus,
+    fetch_departments,
+    fetch_my_courses,
+    COLLEGE_CODES,
 )
 from .dept_notices import fetch_dept_notice_list, fetch_dept_notice_detail
 from .dept_registry import resolve_site, list_all_sites, DEFAULT_SITES
 from .grades import fetch_all_grades
 from .lms import (
-    lms_login, LMSSession, _clear_lms_session,
-    fetch_lms_courses, fetch_lms_assignments, fetch_lms_modules,
-    fetch_lms_todo, fetch_lms_upcoming_events, fetch_lms_dashboard,
-    fetch_lms_announcements, fetch_lms_grades, fetch_lms_submissions,
+    lms_login,
+    LMSSession,
+    _clear_lms_session,
+    fetch_lms_courses,
+    fetch_lms_assignments,
+    fetch_lms_modules,
+    fetch_lms_todo,
+    fetch_lms_upcoming_events,
+    fetch_lms_dashboard,
+    fetch_lms_announcements,
+    fetch_lms_grades,
+    fetch_lms_submissions,
     fetch_lms_quizzes,
     fetch_lms_syllabus,
+    download_lms_file,
 )
 from . import __version__
 
@@ -77,7 +92,14 @@ _session_lock = asyncio.Lock()
 _lms_session_lock = asyncio.Lock()
 
 # Errors that may indicate a stale session (worth retrying with fresh login)
-_RETRIABLE = (httpx.HTTPError, ValueError, RuntimeError, AttributeError, KeyError, IndexError)
+_RETRIABLE = (
+    httpx.HTTPError,
+    ValueError,
+    RuntimeError,
+    AttributeError,
+    KeyError,
+    IndexError,
+)
 
 
 async def _get_session() -> Session:
@@ -100,7 +122,9 @@ async def _with_retry(fn, *args, **kwargs):
         session = await _get_session()
         return await fn(session, *args, **kwargs)
     except _RETRIABLE as e:
-        logger.warning(f"KUPID request failed ({type(e).__name__}: {e}), retrying with fresh session")
+        logger.warning(
+            f"KUPID request failed ({type(e).__name__}: {e}), retrying with fresh session"
+        )
         global _session
         async with _session_lock:
             clear_session()
@@ -125,6 +149,7 @@ def _format_items(items: list[NoticeItem], count: int) -> list[dict]:
 # ──────────────────────────────────────────────
 # Existing tools: Login / Notice / Schedule / Scholarship / Search
 # ──────────────────────────────────────────────
+
 
 @server.tool()
 async def kupid_login() -> dict[str, Any]:
@@ -154,18 +179,25 @@ async def kupid_get_notices(page: int = 1, count: int = 20) -> dict[str, Any]:
         count: 한 페이지당 항목 수 (기본값: 20)
     """
     try:
+
         async def _fetch(session):
             return await fetch_notice_list(session, kind="11", page=page, count=count)
 
         items = await _with_retry(_fetch)
-        return {"success": True, "count": len(items), "notices": _format_items(items, count)}
+        return {
+            "success": True,
+            "count": len(items),
+            "notices": _format_items(items, count),
+        }
     except Exception as e:
         logger.error(f"Failed to fetch notices: {e}")
         return {"success": False, "message": f"공지사항 조회 실패: {e}"}
 
 
 @server.tool()
-async def kupid_get_notice_detail(notice_id: str, message_id: str = "") -> dict[str, Any]:
+async def kupid_get_notice_detail(
+    notice_id: str, message_id: str = ""
+) -> dict[str, Any]:
     """KUPID 공지사항의 상세 내용을 조회합니다.
 
     Args:
@@ -173,8 +205,14 @@ async def kupid_get_notice_detail(notice_id: str, message_id: str = "") -> dict[
         message_id: 공지사항 message_id (kupid_get_notices 결과의 message_id 필드)
     """
     try:
-        item = NoticeItem(index=notice_id, message_id=message_id, kind="11",
-                          title="", date="", writer="")
+        item = NoticeItem(
+            index=notice_id,
+            message_id=message_id,
+            kind="11",
+            title="",
+            date="",
+            writer="",
+        )
 
         async def _fetch(session):
             return await fetch_notice_detail(session, item)
@@ -183,9 +221,13 @@ async def kupid_get_notice_detail(notice_id: str, message_id: str = "") -> dict[
         return {
             "success": True,
             "notice": {
-                "id": detail.id, "title": detail.title, "date": detail.date,
-                "writer": detail.writer, "content": detail.content,
-                "attachments": detail.attachments, "url": detail.url,
+                "id": detail.id,
+                "title": detail.title,
+                "date": detail.date,
+                "writer": detail.writer,
+                "content": detail.content,
+                "attachments": detail.attachments,
+                "url": detail.url,
             },
         }
     except Exception as e:
@@ -202,18 +244,25 @@ async def kupid_get_schedules(page: int = 1, count: int = 20) -> dict[str, Any]:
         count: 한 페이지당 항목 수 (기본값: 20)
     """
     try:
+
         async def _fetch(session):
             return await fetch_notice_list(session, kind="89", page=page, count=count)
 
         items = await _with_retry(_fetch)
-        return {"success": True, "count": len(items), "schedules": _format_items(items, count)}
+        return {
+            "success": True,
+            "count": len(items),
+            "schedules": _format_items(items, count),
+        }
     except Exception as e:
         logger.error(f"Failed to fetch schedules: {e}")
         return {"success": False, "message": f"학사일정 조회 실패: {e}"}
 
 
 @server.tool()
-async def kupid_get_schedule_detail(schedule_id: str, message_id: str = "") -> dict[str, Any]:
+async def kupid_get_schedule_detail(
+    schedule_id: str, message_id: str = ""
+) -> dict[str, Any]:
     """KUPID 학사일정의 상세 내용을 조회합니다.
 
     Args:
@@ -221,8 +270,14 @@ async def kupid_get_schedule_detail(schedule_id: str, message_id: str = "") -> d
         message_id: 학사일정 message_id (kupid_get_schedules 결과의 message_id 필드)
     """
     try:
-        item = NoticeItem(index=schedule_id, message_id=message_id, kind="89",
-                          title="", date="", writer="")
+        item = NoticeItem(
+            index=schedule_id,
+            message_id=message_id,
+            kind="89",
+            title="",
+            date="",
+            writer="",
+        )
 
         async def _fetch(session):
             return await fetch_notice_detail(session, item)
@@ -231,9 +286,13 @@ async def kupid_get_schedule_detail(schedule_id: str, message_id: str = "") -> d
         return {
             "success": True,
             "schedule": {
-                "id": detail.id, "title": detail.title, "date": detail.date,
-                "writer": detail.writer, "content": detail.content,
-                "attachments": detail.attachments, "url": detail.url,
+                "id": detail.id,
+                "title": detail.title,
+                "date": detail.date,
+                "writer": detail.writer,
+                "content": detail.content,
+                "attachments": detail.attachments,
+                "url": detail.url,
             },
         }
     except Exception as e:
@@ -250,18 +309,25 @@ async def kupid_get_scholarships(page: int = 1, count: int = 20) -> dict[str, An
         count: 한 페이지당 항목 수 (기본값: 20)
     """
     try:
+
         async def _fetch(session):
             return await fetch_notice_list(session, kind="88", page=page, count=count)
 
         items = await _with_retry(_fetch)
-        return {"success": True, "count": len(items), "scholarships": _format_items(items, count)}
+        return {
+            "success": True,
+            "count": len(items),
+            "scholarships": _format_items(items, count),
+        }
     except Exception as e:
         logger.error(f"Failed to fetch scholarships: {e}")
         return {"success": False, "message": f"장학공지 조회 실패: {e}"}
 
 
 @server.tool()
-async def kupid_get_scholarship_detail(scholarship_id: str, message_id: str = "") -> dict[str, Any]:
+async def kupid_get_scholarship_detail(
+    scholarship_id: str, message_id: str = ""
+) -> dict[str, Any]:
     """KUPID 장학공지의 상세 내용을 조회합니다.
 
     Args:
@@ -269,8 +335,14 @@ async def kupid_get_scholarship_detail(scholarship_id: str, message_id: str = ""
         message_id: 장학공지 message_id (kupid_get_scholarships 결과의 message_id 필드)
     """
     try:
-        item = NoticeItem(index=scholarship_id, message_id=message_id, kind="88",
-                          title="", date="", writer="")
+        item = NoticeItem(
+            index=scholarship_id,
+            message_id=message_id,
+            kind="88",
+            title="",
+            date="",
+            writer="",
+        )
 
         async def _fetch(session):
             return await fetch_notice_detail(session, item)
@@ -279,9 +351,13 @@ async def kupid_get_scholarship_detail(scholarship_id: str, message_id: str = ""
         return {
             "success": True,
             "scholarship": {
-                "id": detail.id, "title": detail.title, "date": detail.date,
-                "writer": detail.writer, "content": detail.content,
-                "attachments": detail.attachments, "url": detail.url,
+                "id": detail.id,
+                "title": detail.title,
+                "date": detail.date,
+                "writer": detail.writer,
+                "content": detail.content,
+                "attachments": detail.attachments,
+                "url": detail.url,
             },
         }
     except Exception as e:
@@ -290,7 +366,9 @@ async def kupid_get_scholarship_detail(scholarship_id: str, message_id: str = ""
 
 
 @server.tool()
-async def kupid_search(keyword: str, board: str = "all", count: int = 20) -> dict[str, Any]:
+async def kupid_search(
+    keyword: str, board: str = "all", count: int = 20
+) -> dict[str, Any]:
     """KUPID 포털에서 키워드로 공지사항/학사일정/장학공지를 검색합니다.
 
     제목에 키워드가 포함된 항목을 반환합니다.
@@ -311,29 +389,40 @@ async def kupid_search(keyword: str, board: str = "all", count: int = 20) -> dic
         elif board in boards:
             targets = [(board, boards[board])]
         else:
-            return {"success": False, "message": f"잘못된 board: {board}. all/notice/schedule/scholarship 중 선택"}
+            return {
+                "success": False,
+                "message": f"잘못된 board: {board}. all/notice/schedule/scholarship 중 선택",
+            }
 
         results = []
         kw_lower = keyword.lower()
 
         for board_name, kind in targets:
+
             async def _fetch(session, k=kind):
                 return await fetch_notice_list(session, kind=k)
 
             items = await _with_retry(_fetch)
             for item in items:
                 if kw_lower in item.title.lower():
-                    results.append({
-                        "board": board_name,
-                        "index": item.index,
-                        "message_id": item.message_id,
-                        "title": item.title,
-                        "date": item.date,
-                        "writer": item.writer,
-                    })
+                    results.append(
+                        {
+                            "board": board_name,
+                            "index": item.index,
+                            "message_id": item.message_id,
+                            "title": item.title,
+                            "date": item.date,
+                            "writer": item.writer,
+                        }
+                    )
 
         results = results[:count]
-        return {"success": True, "keyword": keyword, "count": len(results), "results": results}
+        return {
+            "success": True,
+            "keyword": keyword,
+            "count": len(results),
+            "results": results,
+        }
     except Exception as e:
         logger.error(f"Failed to search: {e}")
         return {"success": False, "message": f"검색 실패: {e}"}
@@ -342,6 +431,7 @@ async def kupid_search(keyword: str, board: str = "all", count: int = 20) -> dic
 # ──────────────────────────────────────────────
 # New: Library seat availability (no auth required)
 # ──────────────────────────────────────────────
+
 
 @server.tool()
 async def kupid_get_library_seats(library_name: str = "") -> dict[str, Any]:
@@ -372,8 +462,7 @@ async def kupid_get_library_seats(library_name: str = "") -> dict[str, Any]:
         else:
             all_data = await fetch_all_seats()
             library_data = {
-                name: [asdict(r) for r in rooms]
-                for name, rooms in all_data.items()
+                name: [asdict(r) for r in rooms] for name, rooms in all_data.items()
             }
 
         # Calculate totals
@@ -393,7 +482,9 @@ async def kupid_get_library_seats(library_name: str = "") -> dict[str, Any]:
                 "total_seats": total_seats,
                 "total_available": total_available,
                 "total_in_use": total_in_use,
-                "occupancy_rate": f"{(total_in_use / total_seats * 100):.1f}%" if total_seats else "0%",
+                "occupancy_rate": f"{(total_in_use / total_seats * 100):.1f}%"
+                if total_seats
+                else "0%",
             },
         }
     except Exception as e:
@@ -405,8 +496,11 @@ async def kupid_get_library_seats(library_name: str = "") -> dict[str, Any]:
 # New: Personal timetable (SSO required)
 # ──────────────────────────────────────────────
 
+
 @server.tool()
-async def kupid_get_timetable(day: str = "all", ics_export: bool = False) -> dict[str, Any]:
+async def kupid_get_timetable(
+    day: str = "all", ics_export: bool = False
+) -> dict[str, Any]:
     """개인 수업시간표를 조회합니다 (SSO 로그인 필요).
 
     포털 메인 페이지의 시간표 위젯 데이터를 파싱합니다.
@@ -419,13 +513,17 @@ async def kupid_get_timetable(day: str = "all", ics_export: bool = False) -> dic
         day_map = {"mon": 1, "tue": 2, "wed": 3, "thu": 4, "fri": 5}
 
         if day == "all":
+
             async def _fetch(session):
                 return await fetch_full_timetable(session)
+
             entries = await _with_retry(_fetch)
         elif day in day_map:
             d = day_map[day]
+
             async def _fetch_day(session, d=d):
                 return await fetch_timetable_day(session, d)
+
             entries = await _with_retry(_fetch_day)
         else:
             return {
@@ -465,6 +563,7 @@ async def kupid_get_timetable(day: str = "all", ics_export: bool = False) -> dic
 # New: Course search & syllabus (SSO required)
 # ──────────────────────────────────────────────
 
+
 @server.tool()
 async def kupid_search_courses(
     year: str = "",
@@ -494,15 +593,16 @@ async def kupid_search_courses(
                 "success": True,
                 "message": "단과대 코드를 선택해주세요",
                 "colleges": [
-                    {"code": code, "name": name}
-                    for code, name in COLLEGE_CODES.items()
+                    {"code": code, "name": name} for code, name in COLLEGE_CODES.items()
                 ],
             }
 
         # If no department specified, fetch department list
         if not department:
+
             async def _fetch_depts(session, col=college):
                 return await fetch_departments(session, col, year, semester)
+
             depts = await _with_retry(_fetch_depts)
             college_name = COLLEGE_CODES.get(college, college)
             return {
@@ -515,8 +615,12 @@ async def kupid_search_courses(
         # Search courses
         async def _fetch_courses(session):
             return await search_courses(
-                session, year=year, semester=semester,
-                campus=campus, college=college, department=department,
+                session,
+                year=year,
+                semester=semester,
+                campus=campus,
+                college=college,
+                department=department,
             )
 
         courses = await _with_retry(_fetch_courses)
@@ -562,8 +666,11 @@ async def kupid_get_syllabus(
 
         async def _fetch(session):
             return await fetch_syllabus(
-                session, course_code=course_code, section=section,
-                year=year, semester=semester,
+                session,
+                course_code=course_code,
+                section=section,
+                year=year,
+                semester=semester,
             )
 
         content = await _with_retry(_fetch)
@@ -590,6 +697,7 @@ async def kupid_get_syllabus(
 # ──────────────────────────────────────────────
 # New: My enrolled courses (infodepot)
 # ──────────────────────────────────────────────
+
 
 @server.tool()
 async def kupid_my_courses(year: str = "", semester: str = "") -> dict[str, Any]:
@@ -647,6 +755,7 @@ async def kupid_get_all_grades(year_term: str = "") -> dict[str, Any]:
         year_term: 조회할 학년도/학기 코드 (예: "20242R"). 비우면 전체 조회
     """
     try:
+
         async def _fetch(session):
             return await fetch_all_grades(session, year_term=year_term)
 
@@ -708,7 +817,8 @@ async def kupid_get_all_grades(year_term: str = "") -> dict[str, Any]:
                     "official_converted_score": latest_summary.official_converted_score,
                     "rank_for_certificate": latest_summary.rank_for_certificate,
                 }
-                if latest_summary else None
+                if latest_summary
+                else None
             ),
         }
     except Exception as e:
@@ -719,6 +829,7 @@ async def kupid_get_all_grades(year_term: str = "") -> dict[str, Any]:
 # ──────────────────────────────────────────────
 # New: Department notices (no auth required)
 # ──────────────────────────────────────────────
+
 
 @server.tool()
 async def kupid_dept_notices(
@@ -794,9 +905,7 @@ async def kupid_dept_notices(
 
 
 @server.tool()
-async def kupid_dept_notice_detail(
-    site_name: str, article_no: str
-) -> dict[str, Any]:
+async def kupid_dept_notice_detail(site_name: str, article_no: str) -> dict[str, Any]:
     """학과/대학원 공지사항의 상세 내용을 조회합니다 (인증 불필요).
 
     kupid_dept_notices로 조회한 공지의 상세 내용을 가져옵니다.
@@ -835,6 +944,7 @@ async def kupid_dept_notice_detail(
 # New: Canvas LMS (mylms.korea.ac.kr)
 # ──────────────────────────────────────────────
 
+
 async def _get_lms_session() -> LMSSession:
     """Get or create a valid LMS session. Proactive refresh near expiry."""
     global _lms_session
@@ -846,6 +956,7 @@ async def _get_lms_session() -> LMSSession:
         elif _lms_session:
             logger.info("LMS session expired, re-logging in")
         import os
+
         user_id = os.environ.get("KU_PORTAL_ID", "")
         password = os.environ.get("KU_PORTAL_PW", "")
         _lms_session = await lms_login(user_id, password)
@@ -858,7 +969,9 @@ async def _lms_with_retry(fn, *args, **kwargs):
         session = await _get_lms_session()
         return await fn(session, *args, **kwargs)
     except _RETRIABLE as e:
-        logger.warning(f"LMS request failed ({type(e).__name__}: {e}), retrying with fresh session")
+        logger.warning(
+            f"LMS request failed ({type(e).__name__}: {e}), retrying with fresh session"
+        )
         global _lms_session
         async with _lms_session_lock:
             _clear_lms_session()
@@ -896,19 +1009,24 @@ async def kupid_lms_courses() -> dict[str, Any]:
 
 
 @server.tool()
-async def kupid_lms_assignments(course_id: int, upcoming_only: bool = False) -> dict[str, Any]:
+async def kupid_lms_assignments(
+    course_id: int, upcoming_only: bool = False
+) -> dict[str, Any]:
     """Canvas LMS 과제 목록을 조회합니다.
 
-    특정 과목의 과제(assignments) 목록을 가져옵니다.
+    특정 과목의 전체 과제(assignments) 목록을 가져옵니다.
+    기본적으로 완료/마감 과제 포함 전체를 반환합니다.
     kupid_lms_courses로 course_id를 먼저 확인하세요.
 
     Args:
         course_id: 과목 ID (kupid_lms_courses의 id 필드)
-        upcoming_only: True이면 마감 전 과제만 표시
+        upcoming_only: True이면 마감 전 과제만 표시 (기본값: False, 전체 과제 반환)
     """
     try:
+
         async def _fetch(session, cid=course_id, upcoming=upcoming_only):
             return await fetch_lms_assignments(session, cid, upcoming)
+
         assignments = await _lms_with_retry(_fetch)
         return {
             "success": True,
@@ -943,8 +1061,10 @@ async def kupid_lms_modules(course_id: int) -> dict[str, Any]:
         course_id: 과목 ID (kupid_lms_courses의 id 필드)
     """
     try:
+
         async def _fetch(session, cid=course_id):
             return await fetch_lms_modules(session, cid)
+
         modules = await _lms_with_retry(_fetch)
         return {
             "success": True,
@@ -962,6 +1082,8 @@ async def kupid_lms_modules(course_id: int) -> dict[str, Any]:
                             "id": item.get("id"),
                             "title": item.get("title"),
                             "type": item.get("type"),
+                            "content_id": item.get("content_id"),
+                            "url": item.get("url"),
                             "html_url": item.get("html_url"),
                         }
                         for item in m.get("items", [])
@@ -982,6 +1104,7 @@ async def kupid_lms_todo() -> dict[str, Any]:
     마감이 다가오는 과제, 퀴즈 등을 보여줍니다.
     """
     try:
+
         async def _fetch_all(session):
             todos = await fetch_lms_todo(session)
             events = await fetch_lms_upcoming_events(session)
@@ -999,7 +1122,9 @@ async def kupid_lms_todo() -> dict[str, Any]:
                         "due_at": t.get("assignment", {}).get("due_at"),
                         "course_id": t.get("assignment", {}).get("course_id"),
                         "html_url": t.get("assignment", {}).get("html_url"),
-                    } if t.get("assignment") else None,
+                    }
+                    if t.get("assignment")
+                    else None,
                 }
                 for t in todos
             ],
@@ -1075,8 +1200,10 @@ async def kupid_lms_grades(course_id: int) -> dict[str, Any]:
         course_id: 과목 ID (kupid_lms_courses의 id 필드)
     """
     try:
+
         async def _fetch(session, cid=course_id):
             return await fetch_lms_grades(session, cid)
+
         enrollments = await _lms_with_retry(_fetch)
         return {
             "success": True,
@@ -1090,7 +1217,9 @@ async def kupid_lms_grades(course_id: int) -> dict[str, Any]:
                         "current_grade": e.get("grades", {}).get("current_grade"),
                         "final_score": e.get("grades", {}).get("final_score"),
                         "final_grade": e.get("grades", {}).get("final_grade"),
-                    } if e.get("grades") else None,
+                    }
+                    if e.get("grades")
+                    else None,
                 }
                 for e in enrollments
             ],
@@ -1111,8 +1240,10 @@ async def kupid_lms_submissions(course_id: int) -> dict[str, Any]:
         course_id: 과목 ID (kupid_lms_courses의 id 필드)
     """
     try:
+
         async def _fetch(session, cid=course_id):
             return await fetch_lms_submissions(session, cid)
+
         submissions = await _lms_with_retry(_fetch)
         return {
             "success": True,
@@ -1121,8 +1252,12 @@ async def kupid_lms_submissions(course_id: int) -> dict[str, Any]:
             "submissions": [
                 {
                     "assignment_id": s.get("assignment_id"),
-                    "assignment_name": s.get("assignment", {}).get("name") if s.get("assignment") else None,
-                    "due_at": s.get("assignment", {}).get("due_at") if s.get("assignment") else None,
+                    "assignment_name": s.get("assignment", {}).get("name")
+                    if s.get("assignment")
+                    else None,
+                    "due_at": s.get("assignment", {}).get("due_at")
+                    if s.get("assignment")
+                    else None,
                     "submitted_at": s.get("submitted_at"),
                     "workflow_state": s.get("workflow_state"),
                     "score": s.get("score"),
@@ -1151,8 +1286,10 @@ async def kupid_lms_quizzes(course_id: int) -> dict[str, Any]:
         course_id: 과목 ID (kupid_lms_courses의 id 필드)
     """
     try:
+
         async def _fetch(session, cid=course_id):
             return await fetch_lms_quizzes(session, cid)
+
         quizzes = await _lms_with_retry(_fetch)
         return {
             "success": True,
@@ -1180,7 +1317,9 @@ async def kupid_lms_quizzes(course_id: int) -> dict[str, Any]:
 
 
 @server.tool()
-async def kupid_lms_syllabus(course_code: str = "", course_id: int = 0) -> dict[str, Any]:
+async def kupid_lms_syllabus(
+    course_code: str = "", course_id: int = 0
+) -> dict[str, Any]:
     """Canvas LMS 수업 계획서(syllabus)를 조회합니다.
 
     과목의 수업 계획서 내용을 가져옵니다.
@@ -1194,7 +1333,10 @@ async def kupid_lms_syllabus(course_code: str = "", course_id: int = 0) -> dict[
     from bs4 import BeautifulSoup
 
     if not course_code and not course_id:
-        return {"success": False, "message": "course_code 또는 course_id 중 하나를 입력하세요."}
+        return {
+            "success": False,
+            "message": "course_code 또는 course_id 중 하나를 입력하세요.",
+        }
 
     try:
         # course_code로 조회 시 course_id 찾기
@@ -1202,7 +1344,8 @@ async def kupid_lms_syllabus(course_code: str = "", course_id: int = 0) -> dict[
             courses = await _lms_with_retry(fetch_lms_courses)
             keyword = course_code.upper()
             matched = [
-                c for c in courses
+                c
+                for c in courses
                 if keyword in (c.get("course_code") or "").upper()
                 or keyword in (c.get("name") or "").upper()
             ]
@@ -1211,10 +1354,14 @@ async def kupid_lms_syllabus(course_code: str = "", course_id: int = 0) -> dict[
                 try:
                     session = await _get_session()
                     enrolled, _ = await fetch_my_courses(session)
-                    enrolled_match = [e for e in enrolled if keyword == e.course_code.upper()]
+                    enrolled_match = [
+                        e for e in enrolled if keyword == e.course_code.upper()
+                    ]
                     if enrolled_match:
                         enroll_name = enrolled_match[0].course_name
-                        matched = [c for c in courses if enroll_name in (c.get("name") or "")]
+                        matched = [
+                            c for c in courses if enroll_name in (c.get("name") or "")
+                        ]
                 except Exception:
                     pass
 
@@ -1229,7 +1376,11 @@ async def kupid_lms_syllabus(course_code: str = "", course_id: int = 0) -> dict[
                     "success": False,
                     "message": f"'{course_code}'에 해당하는 과목이 {len(matched)}개 있습니다. course_id를 지정하세요.",
                     "candidates": [
-                        {"id": c.get("id"), "name": c.get("name"), "course_code": c.get("course_code")}
+                        {
+                            "id": c.get("id"),
+                            "name": c.get("name"),
+                            "course_code": c.get("course_code"),
+                        }
                         for c in matched
                     ],
                 }
@@ -1251,19 +1402,31 @@ async def kupid_lms_syllabus(course_code: str = "", course_id: int = 0) -> dict[
             if iframe:
                 iframe_src = iframe.get("src", "")
                 from urllib.parse import urlparse
+
                 parsed = urlparse(iframe_src)
-                if parsed.scheme not in ("http", "https") or not parsed.netloc.endswith(".korea.ac.kr"):
+                if parsed.scheme not in ("http", "https") or not parsed.netloc.endswith(
+                    ".korea.ac.kr"
+                ):
                     raise ValueError(f"Untrusted iframe src: {iframe_src!r}")
                 try:
-                    from .courses import _establish_infodepot_session, parse_syllabus_structured, INFODEPOT_BASE
+                    from .courses import (
+                        _establish_infodepot_session,
+                        parse_syllabus_structured,
+                        INFODEPOT_BASE,
+                    )
                     from .auth import _BROWSER_HEADERS
 
                     session = await _get_session()
-                    async with httpx.AsyncClient(timeout=30.0, follow_redirects=True) as client:
+                    async with httpx.AsyncClient(
+                        timeout=30.0, follow_redirects=True
+                    ) as client:
                         await _establish_infodepot_session(client, session)
                         resp = await client.get(
                             iframe_src,
-                            headers={**_BROWSER_HEADERS, "referer": f"{INFODEPOT_BASE}/lecture/LecMajorSub.jsp"},
+                            headers={
+                                **_BROWSER_HEADERS,
+                                "referer": f"{INFODEPOT_BASE}/lecture/LecMajorSub.jsp",
+                            },
                         )
                         html = resp.content.decode("euc-kr", errors="replace")
                         structured = parse_syllabus_structured(html)
@@ -1273,7 +1436,9 @@ async def kupid_lms_syllabus(course_code: str = "", course_id: int = 0) -> dict[
                                 "course_id": course_id,
                                 "course_name": course_data.get("name"),
                                 "course_code": course_data.get("course_code"),
-                                "term": course_data.get("term", {}).get("name") if course_data.get("term") else None,
+                                "term": course_data.get("term", {}).get("name")
+                                if course_data.get("term")
+                                else None,
                                 "syllabus_url": f"https://mylms.korea.ac.kr/courses/{course_id}/assignments/syllabus",
                                 **structured,
                             }
@@ -1287,13 +1452,66 @@ async def kupid_lms_syllabus(course_code: str = "", course_id: int = 0) -> dict[
             "course_id": course_id,
             "course_name": course_data.get("name"),
             "course_code": course_data.get("course_code"),
-            "term": course_data.get("term", {}).get("name") if course_data.get("term") else None,
+            "term": course_data.get("term", {}).get("name")
+            if course_data.get("term")
+            else None,
             "syllabus_url": f"https://mylms.korea.ac.kr/courses/{course_id}/assignments/syllabus",
-            "syllabus": syllabus_text if syllabus_text else "(수업 계획서가 비어 있습니다)",
+            "syllabus": syllabus_text
+            if syllabus_text
+            else "(수업 계획서가 비어 있습니다)",
         }
     except Exception as e:
         logger.error(f"Failed to fetch LMS syllabus: {e}")
         return {"success": False, "message": f"LMS 수업 계획서 조회 실패: {e}"}
+
+
+@server.tool()
+async def kupid_lms_download_file(
+    file_id: int,
+    save_dir: str,
+    filename: str = "",
+) -> dict[str, Any]:
+    """Canvas LMS 파일을 지정한 디렉토리에 다운로드합니다.
+
+    file_id는 kupid_lms_modules 결과의 items에서 type이 'File'인 항목의
+    content_id 필드에서 얻을 수 있습니다.
+
+    Args:
+        file_id: Canvas 파일 ID (items[*].content_id)
+        save_dir: 저장할 디렉토리 절대경로 (예: /Users/me/Documents/lecture)
+        filename: 저장 파일명 (생략 시 Canvas 원본 파일명 사용)
+    """
+    try:
+        # Expand ~ and validate absolute path
+        raw_path = save_dir.strip()
+        if not raw_path:
+            return {"success": False, "message": "save_dir가 비어 있습니다."}
+        target_dir = Path(raw_path).expanduser()
+        if not target_dir.is_absolute():
+            return {
+                "success": False,
+                "message": f"save_dir는 절대경로여야 합니다: {save_dir}",
+            }
+        if ".." in target_dir.parts:
+            return {
+                "success": False,
+                "message": "save_dir에 '..'를 포함할 수 없습니다.",
+            }
+
+        fname = filename.strip() or None
+
+        async def _fetch(session, fid=file_id, d=target_dir, fn=fname):
+            return await download_lms_file(session, fid, d, fn)
+
+        result = await _lms_with_retry(_fetch)
+        return {
+            "success": True,
+            "file_id": file_id,
+            **result,
+        }
+    except Exception as e:
+        logger.error(f"Failed to download LMS file {file_id}: {e}")
+        return {"success": False, "message": f"LMS 파일 다운로드 실패: {e}"}
 
 
 def main():
@@ -1318,6 +1536,7 @@ def main():
     except Exception as e:
         logger.error(f"Server error: {e}")
         import traceback
+
         logger.error(traceback.format_exc())
         sys.exit(1)
 

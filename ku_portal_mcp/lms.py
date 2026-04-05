@@ -91,7 +91,9 @@ def _make_client() -> httpx.AsyncClient:
     )
 
 
-async def _ksso_login(client: httpx.AsyncClient, user_id: str, password: str) -> tuple[str, str]:
+async def _ksso_login(
+    client: httpx.AsyncClient, user_id: str, password: str
+) -> tuple[str, str]:
     """Perform KSSO SAML login and return (redirect_url, emp_no)."""
     # Step 1: Get KSSO login page via exsignon
     resp = await client.get(
@@ -191,7 +193,9 @@ async def _follow_saml_redirects(client: httpx.AsyncClient, url: str) -> str:
     raise RuntimeError("SAML redirect chain ended without callback page")
 
 
-async def _canvas_login(client: httpx.AsyncClient, iframe_html: str, iframe_url: str = "") -> None:
+async def _canvas_login(
+    client: httpx.AsyncClient, iframe_html: str, iframe_url: str = ""
+) -> None:
     """Decrypt Canvas password from iframe and submit Canvas login form."""
     encrypted_token = re.search(r'loginCryption\("([^"]+)"', iframe_html)
     pkey_match = re.search(
@@ -208,7 +212,9 @@ async def _canvas_login(client: httpx.AsyncClient, iframe_html: str, iframe_url:
         raise RuntimeError("Failed to extract Canvas login parameters from iframe")
 
     # RSA decrypt the Canvas password
-    pkey = serialization.load_pem_private_key(pkey_match.group(1).encode(), password=None)
+    pkey = serialization.load_pem_private_key(
+        pkey_match.group(1).encode(), password=None
+    )
     canvas_password = pkey.decrypt(
         base64.b64decode(encrypted_token.group(1)),
         padding.PKCS1v15(),
@@ -359,7 +365,9 @@ async def fetch_lms_courses(session: LMSSession) -> list[dict]:
 
 
 async def fetch_lms_assignments(
-    session: LMSSession, course_id: int, upcoming_only: bool = False,
+    session: LMSSession,
+    course_id: int,
+    upcoming_only: bool = False,
 ) -> list[dict]:
     """Fetch assignments for a course."""
     async with _api_client(session) as client:
@@ -375,7 +383,9 @@ async def fetch_lms_assignments(
 
 
 async def fetch_lms_modules(
-    session: LMSSession, course_id: int, include_items: bool = True,
+    session: LMSSession,
+    course_id: int,
+    include_items: bool = True,
 ) -> list[dict]:
     """Fetch modules (weekly content) for a course."""
     async with _api_client(session) as client:
@@ -415,7 +425,8 @@ async def fetch_lms_dashboard(session: LMSSession) -> list[dict]:
 
 
 async def fetch_lms_announcements(
-    session: LMSSession, course_ids: list[int],
+    session: LMSSession,
+    course_ids: list[int],
 ) -> list[dict]:
     """Fetch announcements for specified courses."""
     async with _api_client(session) as client:
@@ -433,7 +444,8 @@ async def fetch_lms_announcements(
 
 
 async def fetch_lms_grades(
-    session: LMSSession, course_id: int,
+    session: LMSSession,
+    course_id: int,
 ) -> list[dict]:
     """Fetch enrollment grades for a course.
 
@@ -454,7 +466,8 @@ async def fetch_lms_grades(
 
 
 async def fetch_lms_submissions(
-    session: LMSSession, course_id: int,
+    session: LMSSession,
+    course_id: int,
 ) -> list[dict]:
     """Fetch all assignment submissions for the current user in a course.
 
@@ -476,7 +489,8 @@ async def fetch_lms_submissions(
 
 
 async def fetch_lms_quizzes(
-    session: LMSSession, course_id: int,
+    session: LMSSession,
+    course_id: int,
 ) -> list[dict]:
     """Fetch quizzes for a course.
 
@@ -499,7 +513,8 @@ async def fetch_lms_quizzes(
             if resp2.status_code == 200:
                 assignments = resp2.json()
                 return [
-                    a for a in assignments
+                    a
+                    for a in assignments
                     if a.get("is_quiz_assignment")
                     or "quizzes.next" in (a.get("html_url") or "")
                     or a.get("submission_types") == ["external_tool"]
@@ -507,6 +522,78 @@ async def fetch_lms_quizzes(
             return []
         resp.raise_for_status()
         return resp.json()
+
+
+async def fetch_lms_file_info(session: LMSSession, file_id: int) -> dict:
+    """Fetch Canvas file metadata (filename, url, size, content-type)."""
+    async with _api_client(session) as client:
+        resp = await client.get(f"/api/v1/files/{file_id}")
+        resp.raise_for_status()
+        return resp.json()
+
+
+def _sanitize_filename(name: str) -> str:
+    """Remove path separators and null bytes from filename."""
+    name = name.replace("\x00", "").replace("/", "_").replace("\\", "_")
+    # Strip leading dots to prevent hidden file / traversal
+    name = name.lstrip(".")
+    return name or "unnamed"
+
+
+async def download_lms_file(
+    session: LMSSession,
+    file_id: int,
+    save_dir: Path,
+    filename: str | None = None,
+) -> dict:
+    """Download a Canvas file to save_dir.
+
+    Streams content chunk-by-chunk to handle large files efficiently.
+    Returns dict with path, size, content_type, filename.
+    """
+    info = await fetch_lms_file_info(session, file_id)
+    download_url = info.get("url")
+    if not download_url:
+        raise RuntimeError(
+            f"파일 다운로드 URL을 가져올 수 없습니다 (file_id={file_id})"
+        )
+
+    actual_name = _sanitize_filename(
+        filename or info.get("display_name") or f"file_{file_id}"
+    )
+    save_dir.mkdir(parents=True, exist_ok=True)
+
+    # Avoid overwriting existing files
+    target = save_dir / actual_name
+    if target.exists():
+        stem, suffix = target.stem, target.suffix
+        i = 1
+        while (save_dir / f"{stem}_{i}{suffix}").exists():
+            i += 1
+        target = save_dir / f"{stem}_{i}{suffix}"
+
+    # Canvas /files/:id/download redirects to a pre-signed S3 URL; both legs
+    # may need the session cookie (Canvas gates the redirect).
+    cookie_str = "; ".join(f"{k}={v}" for k, v in session.cookies.items())
+    total = 0
+    async with httpx.AsyncClient(
+        timeout=300.0,
+        headers={"user-agent": _UA, "cookie": cookie_str},
+        follow_redirects=True,
+    ) as client:
+        async with client.stream("GET", download_url) as resp:
+            resp.raise_for_status()
+            with target.open("wb") as f:
+                async for chunk in resp.aiter_bytes(chunk_size=65536):
+                    f.write(chunk)
+                    total += len(chunk)
+
+    return {
+        "path": str(target),
+        "filename": target.name,
+        "size": total,
+        "content_type": info.get("content-type") or info.get("content_type"),
+    }
 
 
 async def fetch_lms_syllabus(
