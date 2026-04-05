@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "ku-portal-mcp"
-version = "0.10.0"
+version = "0.10.1"
 description = "MCP server for Korea University KUPID portal - notices, schedules, scholarships, library, timetable, courses, Canvas LMS, and department notices"
 readme = "README.md"
 requires-python = ">=3.10"
@@ -47,6 +47,14 @@ ku-portal-mcp = "ku_portal_mcp.server:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["ku_portal_mcp"]
+
+[tool.hatch.build.targets.sdist]
+exclude = [
+  ".playwright-mcp",
+  ".cache",
+  ".claude",
+  "uv.lock",
+]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
