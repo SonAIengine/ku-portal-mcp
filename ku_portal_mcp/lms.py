@@ -17,6 +17,7 @@ import json
 import time
 import logging
 import base64
+import html as html_lib
 from dataclasses import dataclass, asdict
 from pathlib import Path
 
@@ -351,6 +352,129 @@ def _api_client(session: LMSSession) -> httpx.AsyncClient:
             "cookie": cookie_str,
         },
     )
+
+
+# ---- LearningX Board (LTI tool id=5 "게시판") ---------------------------
+# Board posts live in a separate SPA backed by a JWT issued after an LTI
+# 1.1 launch. JWTs are short-lived (~2h) and tied to (user, course), so we
+# cache them per course_id in-process to avoid re-launching for every call.
+
+_BOARD_API_BASE = f"{MYLMS_BASE}/learningx/api/v1/learningx_board"
+_BOARD_JWT_TTL = 90 * 60  # 90 minutes — tool JWT exp is ~2h, leave margin
+_board_jwt_cache: dict[int, tuple[str, float]] = {}
+
+
+async def _fetch_board_jwt(session: LMSSession, course_id: int) -> str:
+    """Launch LTI 'board' tool (id=5) and return the xn_api_token JWT.
+
+    The board SPA authenticates all its XHR calls with this JWT.
+    """
+    cached = _board_jwt_cache.get(course_id)
+    if cached and (time.time() - cached[1]) < _BOARD_JWT_TTL:
+        return cached[0]
+
+    cookie_str = "; ".join(f"{k}={v}" for k, v in session.cookies.items())
+
+    # Step 1: Canvas returns a sessionless_launch URL for tool id=5
+    async with _api_client(session) as client:
+        resp = await client.get(
+            f"/api/v1/courses/{course_id}/external_tools/sessionless_launch",
+            params={"id": "5", "launch_type": "course_navigation"},
+        )
+        resp.raise_for_status()
+        launch_url = resp.json()["url"]
+
+    # Step 2: GET launch_url -> Canvas wrapper page with OAuth-signed LTI form
+    async with httpx.AsyncClient(
+        timeout=30.0,
+        headers={"user-agent": _UA, "cookie": cookie_str},
+        follow_redirects=False,
+    ) as client:
+        resp = await client.get(launch_url)
+        resp.raise_for_status()
+        form_match = re.search(
+            r'<form[^>]*id=["\']tool_form["\'][^>]*>(.*?)</form>',
+            resp.text,
+            re.DOTALL,
+        )
+        if not form_match:
+            raise RuntimeError("LTI tool_form not found in launch page")
+        form_html = form_match.group(0)
+        action = html_lib.unescape(
+            re.search(r'action=["\']([^"\']+)["\']', form_html).group(1)
+        )
+        inputs = re.findall(
+            r'<input[^>]*name=["\']([^"\']+)["\'][^>]*value=["\']([^"\']*)["\']',
+            form_html,
+        )
+        form_data = {name: html_lib.unescape(val) for name, val in inputs}
+
+        # Step 3: POST signed form to LearningX Board endpoint -> Set-Cookie: xn_api_token
+        resp = await client.post(action, data=form_data)
+        resp.raise_for_status()
+        set_cookie = resp.headers.get("set-cookie", "")
+        jwt_match = re.search(r"xn_api_token=([^;]+)", set_cookie)
+        if not jwt_match:
+            raise RuntimeError("xn_api_token not found in LTI launch response")
+        jwt = jwt_match.group(1)
+
+    _board_jwt_cache[course_id] = (jwt, time.time())
+    return jwt
+
+
+def _board_client(jwt: str) -> httpx.AsyncClient:
+    return httpx.AsyncClient(
+        timeout=30.0,
+        headers={
+            "user-agent": _UA,
+            "accept": "application/json",
+            "cookie": f"xn_api_token={jwt}",
+            "authorization": f"Bearer {jwt}",
+        },
+    )
+
+
+async def fetch_lms_boards(session: LMSSession, course_id: int) -> list[dict]:
+    """List boards (Q&A 게시판, 강의자료실 등) for a course."""
+    jwt = await _fetch_board_jwt(session, course_id)
+    async with _board_client(jwt) as client:
+        resp = await client.get(f"{_BOARD_API_BASE}/courses/{course_id}/boards")
+        resp.raise_for_status()
+        return resp.json()
+
+
+async def fetch_lms_board_posts(
+    session: LMSSession,
+    course_id: int,
+    board_id: int,
+    page: int = 1,
+    keyword: str = "",
+) -> dict:
+    """List posts in a board. Returns {items, total, ...}."""
+    jwt = await _fetch_board_jwt(session, course_id)
+    async with _board_client(jwt) as client:
+        resp = await client.get(
+            f"{_BOARD_API_BASE}/courses/{course_id}/boards/{board_id}/posts",
+            params={"page": str(page), "filter": "title", "keyword": keyword},
+        )
+        resp.raise_for_status()
+        return resp.json()
+
+
+async def fetch_lms_board_post(
+    session: LMSSession, course_id: int, board_id: int, post_id: int
+) -> dict:
+    """Fetch single post detail with attachments (includes canvas_file_id)."""
+    jwt = await _fetch_board_jwt(session, course_id)
+    async with _board_client(jwt) as client:
+        resp = await client.get(
+            f"{_BOARD_API_BASE}/courses/{course_id}/boards/{board_id}/posts/{post_id}"
+        )
+        resp.raise_for_status()
+        return resp.json()
+
+
+# ---- Canvas native endpoints ------------------------------------------
 
 
 async def fetch_lms_courses(session: LMSSession) -> list[dict]:

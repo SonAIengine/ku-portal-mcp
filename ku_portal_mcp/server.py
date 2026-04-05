@@ -63,6 +63,9 @@ from .lms import (
     fetch_lms_quizzes,
     fetch_lms_syllabus,
     download_lms_file,
+    fetch_lms_boards,
+    fetch_lms_board_posts,
+    fetch_lms_board_post,
 )
 from . import __version__
 
@@ -1512,6 +1515,138 @@ async def kupid_lms_download_file(
     except Exception as e:
         logger.error(f"Failed to download LMS file {file_id}: {e}")
         return {"success": False, "message": f"LMS 파일 다운로드 실패: {e}"}
+
+
+@server.tool()
+async def kupid_lms_list_boards(course_id: int) -> dict[str, Any]:
+    """Canvas LMS 과목의 게시판 목록을 조회합니다.
+
+    Q&A 게시판, 강의자료실 등 교수님이 자료를 올리는 게시판들을 반환합니다.
+    Canvas 네이티브 모듈(kupid_lms_modules)에 자료가 없으면 여기서 찾아보세요.
+
+    Args:
+        course_id: 과목 ID (kupid_lms_courses의 id 필드)
+    """
+    try:
+
+        async def _fetch(session, cid=course_id):
+            return await fetch_lms_boards(session, cid)
+
+        boards = await _lms_with_retry(_fetch)
+        return {
+            "success": True,
+            "course_id": course_id,
+            "count": len(boards),
+            "boards": [
+                {
+                    "id": b.get("id"),
+                    "title": b.get("title"),
+                    "type": b.get("type"),
+                    "slug": b.get("slug"),
+                    "use_attachment": b.get("use_attachment"),
+                }
+                for b in boards
+            ],
+        }
+    except Exception as e:
+        logger.error(f"Failed to list LMS boards: {e}")
+        return {"success": False, "message": f"LMS 게시판 목록 조회 실패: {e}"}
+
+
+@server.tool()
+async def kupid_lms_list_board_posts(
+    course_id: int,
+    board_id: int,
+    page: int = 1,
+    keyword: str = "",
+) -> dict[str, Any]:
+    """게시판의 게시글 목록을 조회합니다.
+
+    Args:
+        course_id: 과목 ID
+        board_id: 게시판 ID (kupid_lms_list_boards의 id 필드)
+        page: 페이지 번호 (기본 1)
+        keyword: 제목 검색어 (기본 전체)
+    """
+    try:
+
+        async def _fetch(session, cid=course_id, bid=board_id, pg=page, kw=keyword):
+            return await fetch_lms_board_posts(session, cid, bid, pg, kw)
+
+        data = await _lms_with_retry(_fetch)
+        items = data.get("items", []) if isinstance(data, dict) else []
+        return {
+            "success": True,
+            "course_id": course_id,
+            "board_id": board_id,
+            "page": page,
+            "count": len(items),
+            "posts": [
+                {
+                    "id": p.get("id"),
+                    "idx": p.get("idx"),
+                    "title": p.get("title"),
+                    "user_name": p.get("user_name"),
+                    "attachment_count": p.get("attachment_count"),
+                    "comment_count": p.get("comment_count"),
+                    "view_count": p.get("view_count"),
+                    "is_notice": p.get("is_notice"),
+                    "created_at": p.get("created_at"),
+                }
+                for p in items
+            ],
+        }
+    except Exception as e:
+        logger.error(f"Failed to list board posts: {e}")
+        return {"success": False, "message": f"게시글 목록 조회 실패: {e}"}
+
+
+@server.tool()
+async def kupid_lms_get_board_post(
+    course_id: int,
+    board_id: int,
+    post_id: int,
+) -> dict[str, Any]:
+    """게시글 상세와 첨부파일 목록을 조회합니다.
+
+    attachments의 canvas_file_id를 kupid_lms_download_file의 file_id로
+    넘기면 파일을 다운로드할 수 있습니다.
+
+    Args:
+        course_id: 과목 ID
+        board_id: 게시판 ID
+        post_id: 게시글 ID (kupid_lms_list_board_posts의 id 필드)
+    """
+    try:
+
+        async def _fetch(session, cid=course_id, bid=board_id, pid=post_id):
+            return await fetch_lms_board_post(session, cid, bid, pid)
+
+        post = await _lms_with_retry(_fetch)
+        return {
+            "success": True,
+            "post": {
+                "id": post.get("id"),
+                "title": post.get("title"),
+                "user_name": post.get("user_name"),
+                "content": post.get("content"),
+                "created_at": post.get("created_at"),
+                "updated_at": post.get("updated_at"),
+                "view_count": post.get("view_count"),
+                "attachments": [
+                    {
+                        "id": a.get("id"),
+                        "filename": a.get("filename"),
+                        "filesize": a.get("filesize"),
+                        "canvas_file_id": a.get("canvas_file_id"),
+                    }
+                    for a in post.get("attachments", [])
+                ],
+            },
+        }
+    except Exception as e:
+        logger.error(f"Failed to get board post: {e}")
+        return {"success": False, "message": f"게시글 조회 실패: {e}"}
 
 
 def main():
