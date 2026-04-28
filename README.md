@@ -1,3 +1,5 @@
+[![MseeP.ai Security Assessment Badge](https://mseep.net/pr/sonaiengine-ku-portal-mcp-badge.png)](https://mseep.ai/app/sonaiengine-ku-portal-mcp)
+
 # ku-portal-mcp
 
 [![PyPI version](https://img.shields.io/pypi/v/ku-portal-mcp.svg)](https://pypi.org/project/ku-portal-mcp/)
