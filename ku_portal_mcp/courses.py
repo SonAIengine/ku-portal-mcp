@@ -4,6 +4,7 @@ Accesses infodepot.korea.ac.kr via SSO token handoff.
 Requires valid KUPID session.
 """
 
+import asyncio
 import re
 import logging
 from dataclasses import dataclass
@@ -18,7 +19,7 @@ logger = logging.getLogger(__name__)
 
 INFODEPOT_BASE = "https://infodepot.korea.ac.kr"
 
-# College code -> name mapping (Seoul campus)
+# Undergraduate college codes (Seoul campus)
 COLLEGE_CODES = {
     "0140": "경영대학",
     "0143": "문과대학",
@@ -34,7 +35,80 @@ COLLEGE_CODES = {
     "7325": "미디어대학",
     "4669": "보건과학대학",
     "6726": "스마트보안학부",
+    "3645": "학생군사교육단",
+    "6458": "법학전문대학원(학부관)",
+    "7094": "스마트모빌리티학부",
+    "6564": "심리학부",
+    "6909": "국제대학",
+    "5959": "교직팀",
+    "7349": "학부대학",
+    "7157": "현장실습지원센터",
 }
+
+# Graduate college codes
+GRAD_COLLEGE_CODES = {
+    "0309": "대학원",
+    "7334": "정부학연구소",
+    "0380": "경영대학원",
+    "0390": "교육대학원",
+    "4027": "생명환경과학대학원",
+    "0454": "정책대학원",
+    "4259": "공학대학원",
+    "6943": "창업경영대학원",
+    "0527": "경영정보대학원",
+    "0478": "국제대학원",
+    "0491": "언론대학원",
+    "0501": "노동대학원",
+    "0508": "법무대학원",
+    "4720": "컴퓨터정보통신대학원",
+    "6382": "문화스포츠대학원",
+    "0538": "인문정보대학원",
+    "0544": "행정대학원",
+    "3411": "보건대학원",
+    "3412": "임상치의학대학원",
+    "6951": "융합과학대학원",
+    "3474": "의용과학대학원",
+    "4877": "정보경영공학전문대학원",
+    "5321": "정보보호대학원",
+    "4745": "경영전문대학원",
+    "5127": "법학전문대학원",
+    "5078": "의학전문대학원",
+    "5258": "융합소프트웨어전문대학원",
+    "5263": "그린스쿨대학원",
+    "5332": "기술경영전문대학원",
+    "6608": "에너지환경대학원(그린스쿨)",
+    "5534": "KU-KIST융합대학원",
+    "6266": "행정전문대학원",
+    "6572": "미디어대학원",
+    "7150": "심리융합과학대학원",
+    "7294": "융합데이터과학대학원",
+    "7297": "개인정보보호대학원",
+    "7298": "SW·AI융합대학원",
+    "7406": "임상간호대학원",
+}
+
+# Period -> (start, end) HH:MM mapping (Korea University standard)
+PERIOD_TIMES = {
+    "1": ("09:00", "10:15"),
+    "2": ("10:30", "11:45"),
+    "3": ("12:00", "13:15"),
+    "4": ("13:30", "14:45"),
+    "5": ("15:00", "16:15"),
+    "6": ("16:30", "17:45"),
+    "7": ("18:00", "18:50"),
+    "8": ("19:00", "19:50"),
+    "9": ("20:00", "20:50"),
+    "10": ("21:00", "21:50"),
+    "11": ("22:00", "22:50"),
+}
+
+# Schedule string token: '월(7-8) 애기능생활관 301호' or concatenated '월(7-8) ...수(7-8) ...'.
+# Captures (day, periods, location) up to the next day-token or end of string.
+_SCHEDULE_TOKEN_RE = re.compile(
+    r"([월화수목금토일])\((\d+(?:-\d+)?)\)\s*"
+    r"([^월화수목금토일\s][^월화수목금토일]*?)"
+    r"(?=[월화수목금토일]\(|\Z)"
+)
 
 TERM_CODES = {
     "1": "1R",
@@ -42,6 +116,63 @@ TERM_CODES = {
     "2": "2R",
     "winter": "2W",
 }
+
+
+@dataclass
+class ScheduleSlot:
+    """One day/period/location slot inside a course schedule string."""
+
+    day: str  # 월/화/수/목/금/토/일
+    periods: str  # "1" or "7-8"
+    location: str  # "애기능생활관 301호"
+    start_time: str  # "18:00"
+    end_time: str  # "19:50"
+
+
+def parse_schedule(schedule: str) -> list[ScheduleSlot]:
+    """Parse a course schedule string into structured slots.
+
+    Examples:
+        "월(7-8) 애기능생활관 301호" -> 1 slot
+        "월(2) 정보통신관 604호수(2) 정보통신관 604호" -> 2 slots
+        "" -> []
+    """
+    slots: list[ScheduleSlot] = []
+    if not schedule:
+        return slots
+    for m in _SCHEDULE_TOKEN_RE.finditer(schedule):
+        day, periods, location = m.group(1), m.group(2), m.group(3).strip()
+        parts = re.split(r"[-~]", periods)
+        start = PERIOD_TIMES.get(parts[0], ("", ""))[0]
+        end = PERIOD_TIMES.get(parts[-1], ("", ""))[1]
+        slots.append(
+            ScheduleSlot(
+                day=day,
+                periods=periods,
+                location=location,
+                start_time=start,
+                end_time=end,
+            )
+        )
+    return slots
+
+
+@dataclass
+class RoomScheduleEntry:
+    """One scheduled course occupying a room at a specific time."""
+
+    course_code: str
+    section: str
+    course_name: str
+    professor: str
+    department: str
+    college: str
+    source: str  # "학부" or "대학원"
+    day: str
+    periods: str
+    location: str
+    start_time: str
+    end_time: str
 
 
 @dataclass
@@ -83,45 +214,56 @@ async def _establish_infodepot_session(
     )
 
 
-async def fetch_departments(
-    session: Session, college_code: str, year: str | None = None, term: str | None = None
+async def _fetch_dept_popup(
+    client: httpx.AsyncClient,
+    college_code: str,
+    year: str,
+    term_code: str,
+    *,
+    is_grad: bool,
 ) -> list[dict]:
-    """Fetch department list for a college.
+    """Fetch department list popup (학부=frm_ms / 대학원=frm_gms)."""
+    frm = "frm_gms" if is_grad else "frm_ms"
+    referer_jsp = "LecGradMajorSub.jsp" if is_grad else "LecMajorSub.jsp"
 
-    Returns list of {"code": "5722", "name": "컴퓨터학과"} dicts.
-    """
-    year, term = resolve_year_semester(year, term)
-    term_code = TERM_CODES.get(term, term)
-
-    async with httpx.AsyncClient(timeout=30.0, follow_redirects=True) as client:
-        await _establish_infodepot_session(client, session)
-
-        resp = await client.get(
-            f"{INFODEPOT_BASE}/lecture/LecDeptPopup.jsp",
-            params={
-                "frm": "frm_ms",
-                "colcd": college_code,
-                "deptcd": "",
-                "dept": "dept",
-                "year": year,
-                "term": term_code,
-                "languageDiv": "ko",
-            },
-            headers={
-                **_BROWSER_HEADERS,
-                "referer": f"{INFODEPOT_BASE}/lecture/LecMajorSub.jsp",
-            },
-        )
-        html = resp.content.decode("euc-kr", errors="replace")
-
-    # Parse JavaScript: el.value ="code"; el.text = "name";
+    resp = await client.get(
+        f"{INFODEPOT_BASE}/lecture/LecDeptPopup.jsp",
+        params={
+            "frm": frm,
+            "colcd": college_code,
+            "deptcd": "",
+            "dept": "dept",
+            "year": year,
+            "term": term_code,
+            "languageDiv": "ko",
+        },
+        headers={
+            **_BROWSER_HEADERS,
+            "referer": f"{INFODEPOT_BASE}/lecture/{referer_jsp}",
+        },
+    )
+    html = resp.content.decode("euc-kr", errors="replace")
     values = re.findall(r'el\.value\s*=\s*"(\w+)"', html)
     texts = re.findall(r'el\.text\s*=\s*"([^"]+)"', html)
+    return [{"code": v, "name": t.strip()} for v, t in zip(values, texts)]
 
-    departments = []
-    for code, name in zip(values, texts):
-        departments.append({"code": code, "name": name.strip()})
-    return departments
+
+async def fetch_departments(
+    session: Session,
+    college_code: str,
+    year: str | None = None,
+    term: str | None = None,
+    *,
+    is_grad: bool = False,
+) -> list[dict]:
+    """Fetch department list for a college (undergraduate by default)."""
+    year, term = resolve_year_semester(year, term)
+    term_code = TERM_CODES.get(term, term)
+    async with httpx.AsyncClient(timeout=30.0, follow_redirects=True) as client:
+        await _establish_infodepot_session(client, session)
+        return await _fetch_dept_popup(
+            client, college_code, year, term_code, is_grad=is_grad
+        )
 
 
 async def search_courses(
@@ -203,6 +345,225 @@ def _parse_course_table(html: str) -> list[CourseInfo]:
             )
 
     return courses
+
+
+async def search_grad_courses(
+    session: Session,
+    year: str | None = None,
+    semester: str | None = None,
+    campus: str = "1",
+    college: str = "",
+    department: str = "",
+) -> list[CourseInfo]:
+    """Search graduate courses (대학원 개설과목).
+
+    Same params as `search_courses` but hits LecGradMajorSub.jsp,
+    which has a different column layout (no campus column).
+    """
+    year, semester = resolve_year_semester(year, semester)
+    term_code = TERM_CODES.get(semester, semester)
+
+    async with httpx.AsyncClient(timeout=30.0, follow_redirects=True) as client:
+        await _establish_infodepot_session(client, session)
+
+        resp = await client.get(
+            f"{INFODEPOT_BASE}/lecture/LecGradMajorSub.jsp",
+            params={
+                "yy": year,
+                "tm": term_code,
+                "sCampus": campus,
+                "col": college,
+                "dept": department,
+                "listSub": "Y",
+                "es": "",
+            },
+            headers={
+                **_BROWSER_HEADERS,
+                "referer": f"{INFODEPOT_BASE}/lecture/LecGradMajorSub.jsp",
+            },
+        )
+        html = resp.content.decode("euc-kr", errors="replace")
+
+    return _parse_grad_course_table(html, default_campus="서울" if campus == "1" else "세종")
+
+
+def _parse_grad_course_table(html: str, default_campus: str = "서울") -> list[CourseInfo]:
+    """Parse graduate course HTML table.
+
+    Column layout (no campus column):
+      [0]학수번호 [1]분반 [2]이수구분 [3]교과목명 [4]담당교수
+      [5]학점(시간) [6]강의시간 [7]교환학생 [8]유연학기
+    """
+    soup = BeautifulSoup(html, "lxml")
+    courses: list[CourseInfo] = []
+    for table in soup.find_all("table"):
+        rows = table.find_all("tr")
+        if len(rows) < 3:
+            continue
+        for row in rows[1:]:
+            cells = [td.get_text(strip=True) for td in row.find_all("td")]
+            if len(cells) < 7:
+                continue
+            if not cells[0]:  # blank spacer rows
+                continue
+            courses.append(
+                CourseInfo(
+                    campus=default_campus,
+                    course_code=cells[0],
+                    section=cells[1],
+                    course_type=cells[2],
+                    course_name=cells[3],
+                    professor=cells[4],
+                    credits=cells[5],
+                    schedule=cells[6],
+                )
+            )
+    return courses
+
+
+def _normalize_label(s: str) -> str:
+    """Strip whitespace for forgiving substring matching ('애기능 301' vs '애기능생활관301호')."""
+    return re.sub(r"\s+", "", s)
+
+
+async def find_room_schedule(
+    session: Session,
+    building: str,
+    room: str = "",
+    day: str = "",
+    year: str | None = None,
+    semester: str | None = None,
+    campus: str = "1",
+    include_grad: bool = True,
+    concurrency: int = 10,
+) -> list[RoomScheduleEntry]:
+    """Find all scheduled courses for a given building/room/day.
+
+    Strategy: fetch every (college, department) course list (학부 + 대학원),
+    parse each course's schedule string into slots, and filter by building/room/day.
+
+    Args:
+        session: Valid KUPID session.
+        building: Building name partial match, e.g. "애기능" matches "애기능생활관".
+        room: Room number partial match, e.g. "301" matches "301호" or "B301".
+        day: Day filter — "월"/"화"/.../"일", or "" for all weekdays.
+        year, semester: Defaults to current academic term.
+        campus: "1" Seoul, "2" Sejong.
+        include_grad: Also search graduate courses.
+        concurrency: Parallel HTTP fan-out cap.
+
+    Returns:
+        Time-sorted, deduped list of RoomScheduleEntry.
+    """
+    year, semester = resolve_year_semester(year, semester)
+    term_code = TERM_CODES.get(semester, semester)
+
+    sem = asyncio.Semaphore(concurrency)
+
+    async with httpx.AsyncClient(timeout=30.0, follow_redirects=True) as client:
+        await _establish_infodepot_session(client, session)
+
+        async def _depts(col: str, is_grad: bool) -> tuple[str, bool, list[dict]]:
+            async with sem:
+                try:
+                    deps = await _fetch_dept_popup(
+                        client, col, year, term_code, is_grad=is_grad
+                    )
+                except (httpx.HTTPError, ValueError) as e:
+                    logger.warning(f"dept popup failed col={col}: {e}")
+                    deps = []
+                return col, is_grad, deps
+
+        dept_jobs = [_depts(col, False) for col in COLLEGE_CODES]
+        if include_grad:
+            dept_jobs += [_depts(col, True) for col in GRAD_COLLEGE_CODES]
+        dept_results = await asyncio.gather(*dept_jobs)
+
+        async def _list(
+            jsp: str, col: str, dept: str, dept_name: str, college_name: str, src: str
+        ) -> list[tuple[CourseInfo, str, str, str]]:
+            async with sem:
+                try:
+                    resp = await client.get(
+                        f"{INFODEPOT_BASE}/lecture/{jsp}",
+                        params={
+                            "yy": year,
+                            "tm": term_code,
+                            "sCampus": campus,
+                            "col": col,
+                            "dept": dept,
+                            "listSub": "Y",
+                            "es": "",
+                        },
+                        headers={
+                            **_BROWSER_HEADERS,
+                            "referer": f"{INFODEPOT_BASE}/lecture/{jsp}",
+                        },
+                    )
+                    html = resp.content.decode("euc-kr", errors="replace")
+                except (httpx.HTTPError, ValueError) as e:
+                    logger.warning(f"course list failed {jsp} {col}/{dept}: {e}")
+                    return []
+                if jsp == "LecGradMajorSub.jsp":
+                    parsed = _parse_grad_course_table(html)
+                else:
+                    parsed = _parse_course_table(html)
+                return [(c, dept_name, college_name, src) for c in parsed]
+
+        list_jobs = []
+        for col, is_grad, deps in dept_results:
+            jsp = "LecGradMajorSub.jsp" if is_grad else "LecMajorSub.jsp"
+            college_name = (
+                GRAD_COLLEGE_CODES.get(col) if is_grad else COLLEGE_CODES.get(col)
+            ) or col
+            src = "대학원" if is_grad else "학부"
+            for d in deps:
+                list_jobs.append(
+                    _list(jsp, col, d["code"], d["name"], college_name, src)
+                )
+
+        chunks = await asyncio.gather(*list_jobs)
+
+    nb = _normalize_label(building)
+    nr = _normalize_label(room) if room else ""
+    day_filter = day.strip() or ""
+
+    entries: list[RoomScheduleEntry] = []
+    seen: set[tuple[str, str, str, str]] = set()
+    for chunk in chunks:
+        for course, dept_name, college_name, src in chunk:
+            for slot in parse_schedule(course.schedule):
+                if day_filter and slot.day != day_filter:
+                    continue
+                loc = _normalize_label(slot.location)
+                if nb not in loc:
+                    continue
+                if nr and nr not in loc:
+                    continue
+                key = (course.course_code, course.section, slot.day, slot.periods)
+                if key in seen:
+                    continue
+                seen.add(key)
+                entries.append(
+                    RoomScheduleEntry(
+                        course_code=course.course_code,
+                        section=course.section,
+                        course_name=course.course_name,
+                        professor=course.professor,
+                        department=dept_name,
+                        college=college_name,
+                        source=src,
+                        day=slot.day,
+                        periods=slot.periods,
+                        location=slot.location,
+                        start_time=slot.start_time,
+                        end_time=slot.end_time,
+                    )
+                )
+
+    _DAY_ORDER = {"월": 0, "화": 1, "수": 2, "목": 3, "금": 4, "토": 5, "일": 6}
+    entries.sort(key=lambda e: (_DAY_ORDER.get(e.day, 9), e.start_time or "99:99"))
+    return entries
 
 
 async def fetch_syllabus(

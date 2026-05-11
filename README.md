@@ -115,15 +115,36 @@ KUPID의 **전체성적조회** 화면에서 최종 확정 성적과 누계 성�
 > COSE101 강의계획서 보여줘
 > AAI110 강의계획서 보여줘
 > 공과대학 개설과목 검색해줘
+> SW·AI융합대학원 인공지능융합학과 개설과목 보여줘
 ```
 
 - **단과대 → 학과 → 과목** 단계적 검색 (코드를 몰라도 됩니다)
-- 서울캠퍼스 14개 단과대 지원 (경영대학, 문과대학, 정보대학, 공과대학 등)
+- 서울캠퍼스 학부 22개 단과대 + 대학원 38개 단과대 지원
+  - 학부 예: 경영, 문과, 정보, 공과, 이과, 미디어, 사범, 보건과학, 학부대학 등
+  - 대학원 예: SW·AI융합, 융합데이터과학, 정보보호, 공학, 경영전문, 의학전문 등
+- `is_grad: true` 파라미터로 대학원 모드 전환 (`kupid_search_courses(is_grad=true)`)
 - 과목별 학수번호, 분반, 교수명, 학점, 시간표 정보
 - **강의계획서 조회**: 학수번호로 교수/학점/시간표 등 과목 정보 자동 추출 (90+ 학과 매핑)
-- 대학원 과목(AAI 등) 포함 지원
 
-### 7. Canvas LMS — 수강과목 / 과제 / 강의자료
+### 7. 강의실 시간표 — "이 강의실 오늘 비었나?"
+
+특정 건물·호실에 잡힌 정규 수업을 학부+대학원 통합으로 조회합니다.
+대기 가능 시간대 확인용.
+
+```
+> 애기능 301호 오늘 수업 뭐 있어?
+> 정운오IT교양관 B102 화요일 시간표
+> 정보통신관 604호 비는 시간 있어?
+```
+
+- 건물명·호실 부분일치 (예: `building="애기능"`, `room="301"`)
+- 학부 22개 + 대학원 38개 단과대 전수 호출 → 결과 병합 (병렬, 약 30~60초)
+- **요일·교시·시간(HH:MM)·학수번호·강의명·교수·학과/대학·구분(학부/대학원)** 반환
+- 시간순 정렬 + 중복 제거
+- ⚠️ **정규 수업만** 잡힙니다. 학회·세미나·임시 행사 등 비정규 점유는
+  `spacek.korea.ac.kr` 공간예약 시스템 별도 확인 필요
+
+### 8. Canvas LMS — 수강과목 / 과제 / 강의자료
 
 고려대학교 Canvas LMS(mylms.korea.ac.kr)에 접속하여 수강 정보를 조회합니다.
 
@@ -169,22 +190,23 @@ KUPID의 **전체성적조회** 화면에서 최종 확정 성적과 누계 성�
 | 8 | `kupid_search` | 공지/일정/장학 통합 검색 | SSO |
 | 9 | `kupid_get_library_seats` | 도서관 열람실 좌석 현황 | **불필요** |
 | 10 | `kupid_get_timetable` | 개인 수업시간표 + ICS 내보내기 | SSO |
-| 11 | `kupid_search_courses` | 개설과목 검색 (단과대/학과별) | SSO |
+| 11 | `kupid_search_courses` | 개설과목 검색 (학부/대학원, `is_grad` 옵션) | SSO |
 | 12 | `kupid_get_syllabus` | 강의계획서 조회 | SSO |
 | 13 | `kupid_my_courses` | 내 수강신청 내역 (학수번호/시간/강의실) | SSO |
-| 14 | `kupid_get_all_grades` | 전체 성적 / 누적 GPA / 취득학점 조회 | SSO |
-| 15 | `kupid_lms_courses` | LMS 수강과목 목록 | KSSO |
-| 16 | `kupid_lms_assignments` | LMS 과제 목록 (과목별) | KSSO |
-| 17 | `kupid_lms_modules` | LMS 강의자료 (주차별 모듈) | KSSO |
-| 18 | `kupid_lms_todo` | LMS 할 일 / 다가오는 이벤트 | KSSO |
-| 19 | `kupid_lms_dashboard` | LMS 대시보드 + 공지사항 | KSSO |
-| 20 | `kupid_lms_grades` | LMS 성적/점수 조회 | KSSO |
-| 21 | `kupid_lms_submissions` | LMS 과제 제출 현황 | KSSO |
-| 22 | `kupid_lms_quizzes` | LMS 퀴즈/시험 목록 | KSSO |
-| 23 | `kupid_lms_download_file` | LMS 강의자료 파일 다운로드 (PDF 등) | KSSO |
-| 24 | `kupid_lms_list_boards` | LMS 과목 게시판 목록 (Q&A, 강의자료실 등) | KSSO |
-| 25 | `kupid_lms_list_board_posts` | 게시판 게시글 목록 | KSSO |
-| 26 | `kupid_lms_get_board_post` | 게시글 상세 + 첨부파일 (canvas_file_id 포함) | KSSO |
+| 14 | `kupid_room_schedule` | 건물/호실의 정규 수업 시간표 (학부+대학원 통합) | SSO |
+| 15 | `kupid_get_all_grades` | 전체 성적 / 누적 GPA / 취득학점 조회 | SSO |
+| 16 | `kupid_lms_courses` | LMS 수강과목 목록 | KSSO |
+| 17 | `kupid_lms_assignments` | LMS 과제 목록 (과목별) | KSSO |
+| 18 | `kupid_lms_modules` | LMS 강의자료 (주차별 모듈) | KSSO |
+| 19 | `kupid_lms_todo` | LMS 할 일 / 다가오는 이벤트 | KSSO |
+| 20 | `kupid_lms_dashboard` | LMS 대시보드 + 공지사항 | KSSO |
+| 21 | `kupid_lms_grades` | LMS 성적/점수 조회 | KSSO |
+| 22 | `kupid_lms_submissions` | LMS 과제 제출 현황 | KSSO |
+| 23 | `kupid_lms_quizzes` | LMS 퀴즈/시험 목록 | KSSO |
+| 24 | `kupid_lms_download_file` | LMS 강의자료 파일 다운로드 (PDF 등) | KSSO |
+| 25 | `kupid_lms_list_boards` | LMS 과목 게시판 목록 (Q&A, 강의자료실 등) | KSSO |
+| 26 | `kupid_lms_list_board_posts` | 게시판 게시글 목록 | KSSO |
+| 27 | `kupid_lms_get_board_post` | 게시글 상세 + 첨부파일 (canvas_file_id 포함) | KSSO |
 
 > **인증 안내**: SSO = KUPID 포털 인증, KSSO = 고려대 통합 SSO (Canvas LMS용). 모두 같은 ID/PW를 사용하며, 환경변수만 설정하면 자동으로 로그인됩니다.
 
