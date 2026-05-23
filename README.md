@@ -1,3 +1,7 @@
+<p align="center">
+  <img alt="Korea University" src="https://upload.wikimedia.org/wikipedia/commons/thumb/7/74/Korea_University_logotype_%28English_version%29.svg/320px-Korea_University_logotype_%28English_version%29.svg.png" width="320" />
+</p>
+
 # ku-portal-mcp
 
 [![PyPI version](https://img.shields.io/pypi/v/ku-portal-mcp.svg)](https://pypi.org/project/ku-portal-mcp/)
