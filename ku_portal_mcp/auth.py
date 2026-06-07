@@ -14,6 +14,8 @@ from pathlib import Path
 
 import httpx
 
+from ._storage import write_secure_json as _write_secure_json
+
 logger = logging.getLogger(__name__)
 
 CACHE_DIR = Path.home() / ".cache" / "ku-portal-mcp"
@@ -75,8 +77,7 @@ def load_cached_session() -> Session | None:
 
 
 def save_session(session: Session) -> None:
-    CACHE_DIR.mkdir(parents=True, exist_ok=True)
-    SESSION_FILE.write_text(json.dumps(asdict(session)))
+    _write_secure_json(SESSION_FILE, asdict(session))
 
 
 def _extract_cookie(response: httpx.Response, name: str) -> str | None:
@@ -141,7 +142,9 @@ async def _get_login_fields(client: httpx.AsyncClient) -> dict:
     }
 
 
-async def _do_login(client: httpx.AsyncClient, user_id: str, password: str, fields: dict) -> str:
+async def _do_login(
+    client: httpx.AsyncClient, user_id: str, password: str, fields: dict
+) -> str:
     """Submit login form and extract ssotoken.
 
     Uses httpx auto cookie management — cookies from the GET login page

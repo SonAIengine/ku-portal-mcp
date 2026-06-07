@@ -25,6 +25,8 @@ import httpx
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import padding
 
+from ._storage import write_secure_json as _write_secure_json
+
 logger = logging.getLogger(__name__)
 
 LMS_BASE = "https://lms.korea.ac.kr"
@@ -75,13 +77,15 @@ def _load_cached_lms_session() -> LMSSession | None:
 
 
 def _save_lms_session(session: LMSSession) -> None:
-    CACHE_DIR.mkdir(parents=True, exist_ok=True)
-    LMS_SESSION_FILE.write_text(json.dumps(asdict(session)))
+    _write_secure_json(LMS_SESSION_FILE, asdict(session))
 
 
 def _clear_lms_session() -> None:
     if LMS_SESSION_FILE.exists():
         LMS_SESSION_FILE.unlink()
+    # Session cookies are gone; any cached board JWTs are tied to them and
+    # would otherwise keep returning a stale token for up to _BOARD_JWT_TTL.
+    _board_jwt_cache.clear()
 
 
 def _make_client() -> httpx.AsyncClient:
@@ -493,14 +497,18 @@ async def fetch_lms_assignments(
     course_id: int,
     upcoming_only: bool = False,
 ) -> list[dict]:
-    """Fetch assignments for a course."""
+    """Fetch assignments for a course (includes the user's own submission)."""
     async with _api_client(session) as client:
-        params = {"per_page": "50", "order_by": "due_at"}
+        params: list[tuple[str, str]] = [
+            ("per_page", "100"),
+            ("order_by", "due_at"),
+            ("include[]", "submission"),
+        ]
         if upcoming_only:
-            params["bucket"] = "upcoming"
+            params.append(("bucket", "upcoming"))
         resp = await client.get(
             f"/api/v1/courses/{course_id}/assignments",
-            params=params,
+            params=params,  # type: ignore[arg-type]
         )
         resp.raise_for_status()
         return resp.json()
@@ -513,7 +521,7 @@ async def fetch_lms_modules(
 ) -> list[dict]:
     """Fetch modules (weekly content) for a course."""
     async with _api_client(session) as client:
-        params = {"per_page": "50"}
+        params = {"per_page": "100"}
         if include_items:
             params["include[]"] = "items"
         resp = await client.get(
@@ -554,7 +562,10 @@ async def fetch_lms_announcements(
 ) -> list[dict]:
     """Fetch announcements for specified courses."""
     async with _api_client(session) as client:
-        params: list[tuple[str, str]] = [("per_page", "30")]
+        # NOTE: Canvas /announcements windows to ~14 days. Passing start_date
+        # without end_date makes it window to start_date+14d (dropping recent
+        # posts), so we leave the range default = most recent announcements.
+        params: list[tuple[str, str]] = [("per_page", "100")]
         for cid in course_ids:
             params.append(("context_codes[]", f"course_{cid}"))
         resp = await client.get(
@@ -600,7 +611,7 @@ async def fetch_lms_submissions(
     async with _api_client(session) as client:
         params: list[tuple[str, str]] = [
             ("student_ids[]", "self"),
-            ("per_page", "50"),
+            ("per_page", "100"),
             ("include[]", "assignment"),
             ("include[]", "submission_comments"),
         ]
@@ -625,14 +636,14 @@ async def fetch_lms_quizzes(
         # Classic Quizzes API
         resp = await client.get(
             f"/api/v1/courses/{course_id}/quizzes",
-            params={"per_page": "50"},
+            params={"per_page": "100"},
         )
         if resp.status_code == 404:
             # Quizzes not enabled or using New Quizzes (quiz_next)
             # Try assignments with quiz type as fallback
             resp2 = await client.get(
                 f"/api/v1/courses/{course_id}/assignments",
-                params={"per_page": "50"},
+                params={"per_page": "100"},
             )
             if resp2.status_code == 200:
                 assignments = resp2.json()

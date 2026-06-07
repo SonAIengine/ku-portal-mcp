@@ -3,6 +3,26 @@
 이 프로젝트의 주요 변경사항을 기록합니다.
 [Keep a Changelog](https://keepachangelog.com/ko/1.1.0/) 형식을 따르며 [Semantic Versioning](https://semver.org/lang/ko/)을 사용합니다.
 
+## [0.12.0] - 2026-06-07
+
+### 추가
+- **`kupid_lms_announcements`** — 과목 공지(announcement)를 본문 절단 없이 전문(HTML)으로 조회. `course_id` 생략 시 활성 과목 전체. (기존엔 `kupid_lms_dashboard`에서 300자로 잘려서만 볼 수 있었음)
+- `ku_portal_mcp/_storage.py` — 세션 캐시 파일을 0600 권한 + atomic write(temp→`os.replace`)로 안전하게 저장하는 공용 유틸.
+
+### 변경
+- **`kupid_lms_get_board_post`** — 게시글 **댓글(`comments`)을 본문/첨부와 함께 반환**. 댓글 첨부의 직접 다운로드 `url` 포함. (텀프로젝트 발표 동영상처럼 댓글로 제출되는 자료를 조회 가능. 이전엔 LearningX 응답에 댓글이 있는데도 버려졌음)
+- **`kupid_lms_assignments`** — 본인 제출 상태(`submission`: workflow_state/제출시각/점수/지각/미제출), `lock_at`/`unlock_at` 추가. `description` 절단 500→2000자. fetch에 `include[]=submission`.
+- **`kupid_lms_submissions`** — 교수 피드백 `comments`(작성자/내용/시각), 제출 `attachments`(파일 url), `preview_url`, `attempt` 추가. (이전엔 코멘트 개수만 반환)
+- **`kupid_lms_todo`** — 과목명(`context_name`)과 `points_possible` 추가. (어느 과목 과제인지 식별 가능)
+- **`kupid_lms_grades`** — 중간 성적 구간 점수(`current_period_score`/`grade`), `html_url`, `last_activity_at` 추가.
+- `save_session`/`_save_lms_session` — 평문 0644 저장 → 0600 권한 + atomic write로 토큰 노출 위험 차단.
+- LMS 목록 fetch의 `per_page` 50/30 → 100 상향 (과제/공지/제출/모듈/퀴즈 잘림 완화).
+
+### 수정
+- **세션 재시도 로직 안정화** — `_RETRIABLE`에서 `KeyError`/`IndexError`/`AttributeError` 제거. 응답 스키마/파싱 버그를 "세션 만료"로 오인해 매 호출마다 전체 SSO 재로그인하던 문제 해결 (반복 재인증으로 인한 계정 잠금 위험 제거).
+- **board JWT 캐시 무효화** — `_clear_lms_session()` 시 `_board_jwt_cache.clear()`. 세션 재발급 후에도 stale JWT(최대 90분)를 반환해 게시판 호출이 실패하던 문제 해결.
+- `scraper.py` 미사용 변수(`rows`, `title_match`) 제거.
+
 ## [0.11.0] - 2026-05-11
 
 ### 추가

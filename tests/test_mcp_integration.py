@@ -127,7 +127,9 @@ def test_kupid_search_courses_returns_department_selection_output(monkeypatch):
     async def fake_get_session():
         return object()
 
-    async def fake_fetch_departments(session, college_code, year=None, term=None):
+    async def fake_fetch_departments(
+        session, college_code, year=None, term=None, *, is_grad=False
+    ):
         assert college_code == "5720"
         assert year == "2026"
         assert term == "1"

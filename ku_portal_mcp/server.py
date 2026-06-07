@@ -97,14 +97,16 @@ _lms_session: LMSSession | None = None
 _session_lock = asyncio.Lock()
 _lms_session_lock = asyncio.Lock()
 
-# Errors that may indicate a stale session (worth retrying with fresh login)
+# Errors that may indicate a stale session (worth retrying with fresh login).
+# Deliberately excludes KeyError/IndexError/AttributeError: those signal a
+# response-schema/parsing bug, not an expired session, so re-logging in would
+# only repeat the same failure (and risk account lockout from rapid re-auth).
+# HTTPError covers 401/403 + network blips; ValueError/RuntimeError cover the
+# portal returning a login page that then fails to parse.
 _RETRIABLE = (
     httpx.HTTPError,
     ValueError,
     RuntimeError,
-    AttributeError,
-    KeyError,
-    IndexError,
 )
 
 
@@ -1128,9 +1130,21 @@ async def kupid_lms_assignments(
                     "id": a.get("id"),
                     "name": a.get("name"),
                     "due_at": a.get("due_at"),
+                    "lock_at": a.get("lock_at"),
+                    "unlock_at": a.get("unlock_at"),
                     "points_possible": a.get("points_possible"),
                     "submission_types": a.get("submission_types"),
-                    "description": (a.get("description") or "")[:500],
+                    "submission": {
+                        "workflow_state": a.get("submission", {}).get("workflow_state"),
+                        "submitted_at": a.get("submission", {}).get("submitted_at"),
+                        "score": a.get("submission", {}).get("score"),
+                        "grade": a.get("submission", {}).get("grade"),
+                        "late": a.get("submission", {}).get("late"),
+                        "missing": a.get("submission", {}).get("missing"),
+                    }
+                    if a.get("submission")
+                    else None,
+                    "description": (a.get("description") or "")[:2000],
                     "html_url": a.get("html_url"),
                 }
                 for a in assignments
@@ -1208,10 +1222,14 @@ async def kupid_lms_todo() -> dict[str, Any]:
             "todos": [
                 {
                     "type": t.get("type"),
+                    "context_name": t.get("context_name"),
                     "assignment": {
                         "name": t.get("assignment", {}).get("name"),
                         "due_at": t.get("assignment", {}).get("due_at"),
                         "course_id": t.get("assignment", {}).get("course_id"),
+                        "points_possible": t.get("assignment", {}).get(
+                            "points_possible"
+                        ),
                         "html_url": t.get("assignment", {}).get("html_url"),
                     }
                     if t.get("assignment")
@@ -1281,6 +1299,51 @@ async def kupid_lms_dashboard() -> dict[str, Any]:
 
 
 @server.tool()
+async def kupid_lms_announcements(course_id: int | None = None) -> dict[str, Any]:
+    """Canvas LMS 공지(announcement)를 조회합니다.
+
+    course_id를 지정하면 해당 과목, 생략하면 현재 활성 과목 전체의 공지를
+    가져옵니다. kupid_lms_dashboard와 달리 message 본문을 절단하지 않고
+    전문(HTML)으로 반환합니다.
+
+    Args:
+        course_id: 과목 ID (생략 시 활성 과목 전체, kupid_lms_courses 참조)
+    """
+    try:
+
+        async def _fetch(session, cid=course_id):
+            if cid is not None:
+                ids = [cid]
+            else:
+                cards = await fetch_lms_dashboard(session)
+                ids = [c.get("id") for c in cards if c.get("id")]
+            if not ids:
+                return []
+            return await fetch_lms_announcements(session, ids)
+
+        announcements = await _lms_with_retry(_fetch)
+        return {
+            "success": True,
+            "count": len(announcements),
+            "announcements": [
+                {
+                    "id": a.get("id"),
+                    "title": a.get("title"),
+                    "posted_at": a.get("posted_at"),
+                    "context_code": a.get("context_code"),
+                    "author": (a.get("author") or {}).get("display_name"),
+                    "url": a.get("html_url") or a.get("url"),
+                    "message": a.get("message"),
+                }
+                for a in announcements
+            ],
+        }
+    except Exception as e:
+        logger.error(f"Failed to fetch LMS announcements: {e}")
+        return {"success": False, "message": f"LMS 공지 조회 실패: {e}"}
+
+
+@server.tool()
 async def kupid_lms_grades(course_id: int) -> dict[str, Any]:
     """Canvas LMS 성적/점수를 조회합니다.
 
@@ -1303,11 +1366,19 @@ async def kupid_lms_grades(course_id: int) -> dict[str, Any]:
                 {
                     "type": e.get("type"),
                     "enrollment_state": e.get("enrollment_state"),
+                    "last_activity_at": e.get("last_activity_at"),
                     "grades": {
                         "current_score": e.get("grades", {}).get("current_score"),
                         "current_grade": e.get("grades", {}).get("current_grade"),
                         "final_score": e.get("grades", {}).get("final_score"),
                         "final_grade": e.get("grades", {}).get("final_grade"),
+                        "current_period_score": e.get("grades", {}).get(
+                            "current_period_computed_current_score"
+                        ),
+                        "current_period_grade": e.get("grades", {}).get(
+                            "current_period_computed_current_grade"
+                        ),
+                        "html_url": e.get("grades", {}).get("html_url"),
                     }
                     if e.get("grades")
                     else None,
@@ -1356,7 +1427,24 @@ async def kupid_lms_submissions(course_id: int) -> dict[str, Any]:
                     "late": s.get("late"),
                     "missing": s.get("missing"),
                     "points_deducted": s.get("points_deducted"),
-                    "comments_count": len(s.get("submission_comments", [])),
+                    "attempt": s.get("attempt"),
+                    "preview_url": s.get("preview_url"),
+                    "attachments": [
+                        {
+                            "filename": a.get("filename"),
+                            "url": a.get("url"),
+                            "canvas_file_id": a.get("id"),
+                        }
+                        for a in (s.get("attachments") or [])
+                    ],
+                    "comments": [
+                        {
+                            "author_name": c.get("author_name"),
+                            "comment": c.get("comment"),
+                            "created_at": c.get("created_at"),
+                        }
+                        for c in (s.get("submission_comments") or [])
+                    ],
                 }
                 for s in submissions
             ],
@@ -1695,10 +1783,14 @@ async def kupid_lms_get_board_post(
     board_id: int,
     post_id: int,
 ) -> dict[str, Any]:
-    """게시글 상세와 첨부파일 목록을 조회합니다.
+    """게시글 상세와 첨부파일, 댓글(첨부 포함)을 조회합니다.
 
     attachments의 canvas_file_id를 kupid_lms_download_file의 file_id로
-    넘기면 파일을 다운로드할 수 있습니다.
+    넘기면 파일을 다운로드할 수 있습니다. attachments[].url은 직접
+    다운로드 링크입니다(시간제한 verifier 토큰 포함).
+
+    comments에는 각 댓글의 본문과 첨부파일(동영상/PDF 등)이 포함됩니다.
+    예: 텀프로젝트 게시판에서 팀별 발표 동영상은 댓글 첨부로 제출됩니다.
 
     Args:
         course_id: 과목 ID
@@ -1711,6 +1803,19 @@ async def kupid_lms_get_board_post(
             return await fetch_lms_board_post(session, cid, bid, pid)
 
         post = await _lms_with_retry(_fetch)
+
+        def _attachments(items):
+            return [
+                {
+                    "id": a.get("id"),
+                    "filename": a.get("filename"),
+                    "filesize": a.get("filesize"),
+                    "canvas_file_id": a.get("canvas_file_id"),
+                    "url": a.get("url"),
+                }
+                for a in (items or [])
+            ]
+
         return {
             "success": True,
             "post": {
@@ -1721,14 +1826,19 @@ async def kupid_lms_get_board_post(
                 "created_at": post.get("created_at"),
                 "updated_at": post.get("updated_at"),
                 "view_count": post.get("view_count"),
-                "attachments": [
+                "comment_count": post.get("comment_count"),
+                "attachments": _attachments(post.get("attachments")),
+                "comments": [
                     {
-                        "id": a.get("id"),
-                        "filename": a.get("filename"),
-                        "filesize": a.get("filesize"),
-                        "canvas_file_id": a.get("canvas_file_id"),
+                        "id": c.get("id"),
+                        "user_name": c.get("user_name"),
+                        "content": c.get("content"),
+                        "created_at": c.get("created_at"),
+                        "is_secret": c.get("is_secret"),
+                        "attachments": _attachments(c.get("attachments")),
                     }
-                    for a in post.get("attachments", [])
+                    for c in post.get("comments", [])
+                    if not c.get("is_deleted")
                 ],
             },
         }

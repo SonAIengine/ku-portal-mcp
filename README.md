@@ -210,7 +210,11 @@ KUPID의 **전체성적조회** 화면에서 최종 확정 성적과 누계 성�
 | 24 | `kupid_lms_download_file` | LMS 강의자료 파일 다운로드 (PDF 등) | KSSO |
 | 25 | `kupid_lms_list_boards` | LMS 과목 게시판 목록 (Q&A, 강의자료실 등) | KSSO |
 | 26 | `kupid_lms_list_board_posts` | 게시판 게시글 목록 | KSSO |
-| 27 | `kupid_lms_get_board_post` | 게시글 상세 + 첨부파일 (canvas_file_id 포함) | KSSO |
+| 27 | `kupid_lms_get_board_post` | 게시글 상세 + 첨부파일 + **댓글(첨부 포함)** | KSSO |
+| 28 | `kupid_lms_announcements` | LMS 공지 전문 조회 (과목별 또는 전체, 본문 비절단) | KSSO |
+| 29 | `kupid_lms_syllabus` | LMS 강의계획서 조회 | KSSO |
+| 30 | `kupid_dept_notices` | 학과/대학원 홈페이지 공지 목록 | **불필요** |
+| 31 | `kupid_dept_notice_detail` | 학과/대학원 공지 상세 | **불필요** |
 
 > **인증 안내**: SSO = KUPID 포털 인증, KSSO = 고려대 통합 SSO (Canvas LMS용). 모두 같은 ID/PW를 사용하며, 환경변수만 설정하면 자동으로 로그인됩니다.
 
@@ -316,13 +320,15 @@ cp examples/commands/ku.md ~/.claude/commands/ku.md
 
 ```
 ku_portal_mcp/
-├── server.py      # MCP 서버 + 21개 tool 등록
+├── server.py      # MCP 서버 + 31개 tool 등록
 ├── auth.py        # KUPID SSO 로그인, 세션 캐싱 (30분 TTL)
+├── _storage.py    # 세션 캐시 보안 저장 (0600, atomic write)
 ├── scraper.py     # GRW 공지/일정/장학 파싱
 ├── library.py     # 도서관 좌석 현황 (librsv.korea.ac.kr)
 ├── timetable.py   # 수업시간표 + ICS export
 ├── courses.py     # 개설과목 검색, 강의계획서 (infodepot.korea.ac.kr)
 ├── grades.py      # 전체 성적 / 누적 GPA / 취득학점
+├── dept_notices.py # 학과/대학원 홈페이지 공지
 └── lms.py         # Canvas LMS 연동 (mylms.korea.ac.kr, KSSO SAML)
 ```
 

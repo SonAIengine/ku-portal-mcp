@@ -18,6 +18,7 @@ logger = logging.getLogger(__name__)
 @dataclass
 class NoticeItem:
     """A notice/schedule list item."""
+
     index: str
     message_id: str
     kind: str
@@ -34,6 +35,7 @@ class NoticeItem:
 @dataclass
 class NoticeDetail:
     """Full notice/schedule detail."""
+
     id: str
     title: str
     date: str
@@ -98,24 +100,20 @@ def _parse_notice_list(html: str, kind: str) -> list[NoticeItem]:
     hrefs = re.findall(r"javascript:view\((.+?)\);", html)
 
     soup = BeautifulSoup(html, "lxml")
-    rows = soup.select("table tr")
 
     for i, href in enumerate(hrefs):
         nums = re.findall(r"\d+", href)
         if len(nums) < 8:
             continue
 
-        k, index, message_id, reply_top, reply_pos, reply_to, row_reply, depth = nums[:8]
+        k, index, message_id, reply_top, reply_pos, reply_to, row_reply, depth = nums[
+            :8
+        ]
 
-        # Try to extract title and date from corresponding table row
+        # title/date/writer are filled in later by _enrich_items_from_table
         title = ""
         date = ""
         writer = ""
-        # Best-effort extraction from surrounding HTML
-        title_match = re.search(
-            rf'javascript:view\({re.escape(href.split(",")[0])},{re.escape(href.split(",")[1])}[^)]*\)[^<]*</a>',
-            html,
-        )
 
         item = NoticeItem(
             index=index,
@@ -296,7 +294,9 @@ def _parse_detail_html(html: str, kind: str) -> NoticeDetail:
 
     # Title in row[4]
     if len(table_rows) > 4:
-        title_match = re.search(r'<td colspan="\d">(.+?)</td>', table_rows[4], re.DOTALL)
+        title_match = re.search(
+            r'<td colspan="\d">(.+?)</td>', table_rows[4], re.DOTALL
+        )
         if title_match:
             title = _strip_html(title_match.group(1)).strip()
 
@@ -309,8 +309,7 @@ def _parse_detail_html(html: str, kind: str) -> NoticeDetail:
     attachments = _extract_attachments(html)
 
     portal_url = (
-        f"{PORTAL_BASE}/front/IntroNotice/NMainNoticeContent.kpd"
-        f"?idx={notice_id}&seq="
+        f"{PORTAL_BASE}/front/IntroNotice/NMainNoticeContent.kpd?idx={notice_id}&seq="
     )
 
     return NoticeDetail(
@@ -360,9 +359,11 @@ def _extract_attachments(html: str) -> list[dict]:
                 f"{PORTAL_BASE}/common/Download.kpd"
                 f"?filePath={file_path}&fileName={file_name}"
             )
-            attachments.append({
-                "name": file_name,
-                "url": download_url,
-            })
+            attachments.append(
+                {
+                    "name": file_name,
+                    "url": download_url,
+                }
+            )
 
     return attachments
