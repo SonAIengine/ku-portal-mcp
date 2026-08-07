@@ -83,6 +83,13 @@ API_TIMETABLE = AmsApi(
     "MTUwMjQzMDYzMzI2",
     "dsSles332",
 )
+API_ROOM_GUIDE = AmsApi(
+    "/sch/sles/SleslcCtr/findProfLecrmGudncList.do",
+    "MTMyMjUyNTkwMDM4NDY5MjgwMDA=",
+    "강의실안내조회",
+    "MTUxNDY2NTIxNzUx",
+    "dsLecrmGudnc",
+)
 API_GRADES = AmsApi(
     "/sch/sgra/SgrassCtr/findStdntGradeAllList.do",
     "MTMxODkwMDI3MjA5NjYyOTgwMDA=",
@@ -303,6 +310,11 @@ async def fetch_enrollment(session: AmsSession, term_code: str) -> list[dict]:
 async def fetch_timetable(session: AmsSession, term_code: str) -> list[dict]:
     """시간표(교시 × 요일 격자)."""
     return await query(session, API_TIMETABLE, syySmtDivcd=term_code)
+
+
+async def fetch_room_guide(session: AmsSession, keyword: str) -> list[dict]:
+    """교과목명 키워드로 강의실 안내를 조회한다. 키워드는 필수다."""
+    return await query(session, API_ROOM_GUIDE, subjtKwrd=keyword)
 
 
 async def fetch_grades(session: AmsSession) -> tuple[list[dict], list[dict]]:

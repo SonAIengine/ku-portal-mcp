@@ -3,6 +3,47 @@
 이 프로젝트의 주요 변경사항을 기록합니다.
 [Keep a Changelog](https://keepachangelog.com/ko/1.1.0/) 형식을 따르며 [Semantic Versioning](https://semver.org/lang/ko/)을 사용합니다.
 
+## [0.17.0] - 2026-08-07
+
+차세대 포털 대응 완결. **학사 시스템(AMS) 이전에 대응해 남은 tool을 전부 복구**했습니다.
+
+### 추가
+- **`kupid_ams_auth_start` / `kupid_ams_auth_verify`** — 학사 시스템 2차 보안인증.
+  학교가 개인정보처리시스템에 2차 인증을 필수화해, 인증을 두 단계 tool로 나눴다.
+  메일로 6자리 코드를 받아 넣으면 약 50분간 세션이 유지된다.
+- `ku_portal_mcp/_ams_auth.py` — 인증 전용 브라우저 헬퍼.
+  AMS 서버가 브라우저 컨텍스트를 검증해 순수 HTTP로는 OTP를 맞게 넣어도 세션이
+  승격되지 않는다(폼 재제출 시 2차 인증 화면이 다시 돌아옴). 이 단계만 브라우저로
+  처리하고 쿠키만 넘겨받아 이후 조회는 httpx로 수행한다.
+  `playwright`는 선택 의존성(extras: `ams`)이라 나머지 tool은 영향받지 않는다.
+- `ku_portal_mcp/ams.py` — 학사 API 클라이언트. 넥사크로 DataSet 규약을 따라
+  조건을 `@d1#<필드>`로 전달하고, 메뉴/프로그램 식별자를 요청에 함께 싣는다.
+
+### 변경
+- **`kupid_my_courses`** — `infodepot` HTML 스크래핑 → AMS `findStdAppcsDtlsList`.
+  학수번호·분반·교수·학점·강의시간/강의실·수납상태 반환.
+- **`kupid_get_all_grades`** — AMS `findStdntGradeAllList`.
+  과목별 등급/평점과 누계(GPA·취득학점·환산점수)를 함께 반환.
+- **`kupid_get_timetable`** — AMS `findStdLctreTimtbOutptList`.
+  교시×요일 격자를 항목 목록으로 펴고 ICS 내보내기를 유지한다.
+  격자 칸이 `학수번호<br>과목<br>교수<br>강의실` 형태라 강의실만 뽑는다.
+- **`kupid_search_courses` / `kupid_room_schedule`** — AMS `findProfLecrmGudncList`.
+  학사 시스템이 제공하는 검색 조건이 교과목명뿐이라 단과대/학과 단위 목록 조회는
+  더 이상 지원하지 않는다. 대신 교과목명으로 학수번호·분반·강의실·건물·캠퍼스를 얻는다.
+- `PERIOD_TIMES`에 10~11교시 추가 (야간 수업이 9교시를 넘어간다).
+- `timetable._resolve_period_time` → `resolve_period_time`으로 공개.
+
+### 제거
+- **`kupid_get_syllabus`** — 학사 시스템에서 강의계획서 메뉴가 사라졌다.
+  `kupid_lms_syllabus`(LMS 강의계획서)를 사용하면 된다.
+
+### 확인된 학교 시스템 변경
+- 학사 기능 `infodepot` → `ams.korea.ac.kr` 이전. 메뉴 코드는 포털 메뉴
+  API(`/sp/main/allMenu/list`)에서 확인: 수강신청조회 `M111422`, 시간표 `M111423`,
+  전체성적 `M112493`, 강의실안내 `M112596`.
+- AMS는 2차 인증 미등록 계정이면 로그인 화면에서 막힌다
+  (`IOPUserStatusChk` → `returnCode 1401`). 모바일 인증 등록 또는 이메일 OTP가 필요하다.
+
 ## [0.15.0] - 2026-08-07
 
 차세대 포털 대응 3단계. **LMS 14개 tool을 전부 복구**했습니다. 30개 중 24개가 동작합니다.

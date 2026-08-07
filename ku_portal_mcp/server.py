@@ -50,14 +50,7 @@ from .timetable import (
     timetable_to_ics,
 )
 from .courses import (
-    search_courses,
-    search_grad_courses,
-    fetch_syllabus,
-    fetch_departments,
     fetch_my_courses,
-    find_room_schedule,
-    COLLEGE_CODES,
-    GRAD_COLLEGE_CODES,
 )
 from .dept_notices import fetch_dept_notice_list, fetch_dept_notice_detail
 from .dept_registry import resolve_site, list_all_sites, DEFAULT_SITES
@@ -703,85 +696,44 @@ async def kupid_get_timetable(
 
 
 @server.tool()
-async def kupid_search_courses(
-    year: str = "",
-    semester: str = "",
-    college: str = "",
-    department: str = "",
-    campus: str = "1",
-    is_grad: bool = False,
-) -> dict[str, Any]:
-    """개설과목을 검색합니다 (SSO 로그인 필요).
+async def kupid_search_courses(subject: str, campus: str = "") -> dict[str, Any]:
+    """교과목명으로 개설과목을 검색합니다 (AMS 2차 인증 필요).
 
-    학과/단과대별로 개설된 과목을 조회합니다.
-    단과대 코드가 비어있으면 사용 가능한 단과대 목록을 반환합니다.
+    학수번호, 분반, 강의실, 건물, 캠퍼스를 반환합니다. 학사 시스템이 제공하는
+    검색 조건이 교과목명뿐이라, 단과대/학과 단위 목록 조회는 지원하지 않습니다.
 
     Args:
-        year: 학년도 (기본값: 현재 학기 기준 자동 선택)
-        semester: 학기 ("1"=1학기, "2"=2학기, "summer"=여름학기, "winter"=겨울학기)
-        college: 단과대/대학원 코드 (예: 학부 "5720"=정보대학, 대학원 "7298"=SW·AI융합대학원)
-        department: 학과 코드 (예: 학부 "5722"=컴퓨터학과, 대학원 "7313"=인공지능융합학과)
-        campus: 캠퍼스 ("1"=서울, "2"=세종)
-        is_grad: True면 대학원(LecGradMajorSub.jsp), False면 학부(LecMajorSub.jsp)
+        subject: 교과목명 키워드 (필수, 부분일치)
+        campus: 캠퍼스로 필터링 (예: "자연계", "인문사회계")
     """
     try:
-        year, semester = resolve_year_semester(year, semester)
-        codes = GRAD_COLLEGE_CODES if is_grad else COLLEGE_CODES
-        scope = "대학원" if is_grad else "학부"
-
-        if not college:
+        if not subject.strip():
             return {
-                "success": True,
-                "message": f"{scope} 단과대 코드를 선택해주세요",
-                "scope": scope,
-                "colleges": [{"code": c, "name": n} for c, n in codes.items()],
+                "success": False,
+                "message": "교과목명 키워드(subject)는 필수입니다.",
             }
 
-        if not department:
+        session = await _get_ams_session()
+        rows = await ams.fetch_room_guide(session, subject.strip())
 
-            async def _fetch_depts(session, col=college, _grad=is_grad):
-                return await fetch_departments(
-                    session, col, year, semester, is_grad=_grad
-                )
+        if campus:
+            rows = [r for r in rows if campus in (r.get("buldCampsDivNm") or "")]
 
-            depts = await _with_retry(_fetch_depts)
-            college_name = codes.get(college, college)
-            return {
-                "success": True,
-                "message": f"{college_name}의 학과를 선택해주세요",
-                "scope": scope,
-                "college": college_name,
-                "departments": depts,
-            }
-
-        async def _fetch_courses(session, _grad=is_grad):
-            fn = search_grad_courses if _grad else search_courses
-            return await fn(
-                session,
-                year=year,
-                semester=semester,
-                campus=campus,
-                college=college,
-                department=department,
-            )
-
-        courses = await _with_retry(_fetch_courses)
         return {
             "success": True,
-            "scope": scope,
-            "count": len(courses),
+            "keyword": subject,
+            "count": len(rows),
             "courses": [
                 {
-                    "campus": c.campus,
-                    "course_code": c.course_code,
-                    "section": c.section,
-                    "course_type": c.course_type,
-                    "course_name": c.course_name,
-                    "professor": c.professor,
-                    "credits": c.credits,
-                    "schedule": c.schedule,
+                    "course_code": r.get("sbjtnb") or "",
+                    "section": r.get("dvcno") or "",
+                    "course_name": r.get("subjtNm") or "",
+                    "classroom": r.get("lecrmNm") or "",
+                    "building": r.get("buldDivNm") or "",
+                    "campus": r.get("buldCampsDivNm") or "",
+                    "dept_code": r.get("estblDeprtCd") or "",
                 }
-                for c in courses
+                for r in rows
             ],
         }
     except Exception as e:
@@ -791,130 +743,55 @@ async def kupid_search_courses(
 
 @server.tool()
 async def kupid_room_schedule(
-    building: str,
-    room: str = "",
-    day: str = "",
-    year: str = "",
-    semester: str = "",
-    campus: str = "1",
-    include_grad: bool = True,
+    subject: str, building: str = "", room: str = ""
 ) -> dict[str, Any]:
-    """건물/강의실의 정규 수업 시간표를 조회합니다 (학부+대학원 통합, SSO 로그인 필요).
+    """교과목명으로 강의실을 조회합니다 (AMS 2차 인증 필요).
 
-    "이 강의실 오늘 비어있나?" 확인용. 학부 22개 + 대학원 38개 단과대를 병렬 호출하므로
-    호출당 30~60초 소요 (총 800+ 학과 fan-out). 같은 학기는 자주 안 바뀌니 결과를
-    호출 측에서 캐싱 권장.
-
-    한계:
-    - 학사 시스템에 등록된 정규 수업만 잡힘
-    - 학회·세미나·임시 행사 등 비정규 점유는 별도 (spacek.korea.ac.kr 시스템 영역)
+    학사 시스템의 강의실안내조회는 교과목명 키워드로만 검색할 수 있어,
+    "이 강의실에 무슨 수업이 있나"가 아니라 "이 과목이 어느 강의실인가"를 답합니다.
+    건물·호실은 결과를 좁히는 필터로 쓰입니다.
 
     Args:
-        building: 건물명 부분일치 (예: "애기능" → "애기능생활관" 매치)
-        room: 호실 부분일치 (예: "301" → "301호" / "B301"). 비우면 건물 전체.
-        day: 요일 필터 ("월"/"화"/.../"토"/"일"). 비우면 전 요일.
-        year: 학년도 (기본값: 현재 학기 기준 자동)
-        semester: 학기 ("1","2","summer","winter")
-        campus: "1"=서울, "2"=세종
-        include_grad: True(기본)면 대학원도 검색, False면 학부만
+        subject: 교과목명 키워드 (필수, 부분일치)
+        building: 건물명으로 결과 필터링 (예: "정보통신관")
+        room: 강의실명으로 결과 필터링 (예: "604")
     """
     try:
-        year_resolved, semester_resolved = resolve_year_semester(year, semester)
-
-        async def _find(session):
-            return await find_room_schedule(
-                session,
-                building=building,
-                room=room,
-                day=day,
-                year=year_resolved,
-                semester=semester_resolved,
-                campus=campus,
-                include_grad=include_grad,
-            )
-
-        entries = await _with_retry(_find)
-        return {
-            "success": True,
-            "year": year_resolved,
-            "semester": semester_resolved,
-            "building": building,
-            "room": room,
-            "day": day or "전체",
-            "scope": "학부+대학원" if include_grad else "학부",
-            "count": len(entries),
-            "entries": [
-                {
-                    "day": e.day,
-                    "periods": e.periods,
-                    "start_time": e.start_time,
-                    "end_time": e.end_time,
-                    "course_code": e.course_code,
-                    "section": e.section,
-                    "course_name": e.course_name,
-                    "professor": e.professor,
-                    "department": e.department,
-                    "college": e.college,
-                    "source": e.source,
-                    "location": e.location,
-                }
-                for e in entries
-            ],
-            "note": (
-                "정규 수업만 표시됩니다. 학회/세미나 등 비정규 점유는 spacek.korea.ac.kr 별도 확인."
-            ),
-        }
-    except Exception as e:
-        logger.error(f"Failed to lookup room schedule: {e}")
-        return {"success": False, "message": f"강의실 시간표 조회 실패: {e}"}
-
-
-@server.tool()
-async def kupid_get_syllabus(
-    course_code: str,
-    section: str = "00",
-    year: str = "",
-    semester: str = "",
-) -> dict[str, Any]:
-    """강의계획서를 조회합니다 (SSO 로그인 필요).
-
-    Args:
-        course_code: 학수번호 (예: "COSE101")
-        section: 분반 (예: "02")
-        year: 학년도 (기본값: 현재 학기 기준 자동 선택)
-        semester: 학기 ("1"=1학기, "2"=2학기, "summer"=여름학기, "winter"=겨울학기)
-    """
-    try:
-        year, semester = resolve_year_semester(year, semester)
-
-        async def _fetch(session):
-            return await fetch_syllabus(
-                session,
-                course_code=course_code,
-                section=section,
-                year=year,
-                semester=semester,
-            )
-
-        content = await _with_retry(_fetch)
-
-        if not content:
+        if not subject.strip():
             return {
                 "success": False,
-                "message": f"강의계획서를 찾을 수 없습니다: {course_code} (분반 {section})",
+                "message": "교과목명 키워드(subject)는 필수입니다.",
             }
+
+        session = await _get_ams_session()
+        rows = await ams.fetch_room_guide(session, subject.strip())
+
+        if building:
+            rows = [r for r in rows if building in (r.get("buldDivNm") or "")]
+        if room:
+            rows = [r for r in rows if room in (r.get("lecrmNm") or "")]
 
         return {
             "success": True,
-            "course_code": course_code,
-            "section": section,
-            "year": year,
-            "semester": semester,
-            "content": content,
+            "subject": subject,
+            "count": len(rows),
+            "rooms": [
+                {
+                    "course_code": r.get("sbjtnb") or "",
+                    "section": r.get("dvcno") or "",
+                    "course_name": r.get("subjtNm") or "",
+                    "classroom": r.get("lecrmNm") or "",
+                    "building": r.get("buldDivNm") or "",
+                    "campus": r.get("buldCampsDivNm") or "",
+                    "room_type": r.get("lecrmDivNm") or "",
+                    "dept_code": r.get("estblDeprtCd") or "",
+                }
+                for r in rows
+            ],
         }
     except Exception as e:
-        logger.error(f"Failed to fetch syllabus: {e}")
-        return {"success": False, "message": f"강의계획서 조회 실패: {e}"}
+        logger.error(f"Failed to fetch room guide: {e}")
+        return {"success": False, "message": f"강의실 조회 실패: {e}"}
 
 
 # ──────────────────────────────────────────────
