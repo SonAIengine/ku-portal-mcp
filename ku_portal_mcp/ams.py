@@ -211,6 +211,16 @@ async def start_login(menu_id: str = MENU_ENROLLMENT) -> str:
             "accept": "application/json",
         }
 
+        # 브라우저와 같은 순서를 지켜야 한다. 등록 상태 확인과 인증 요청(IOPPushAuth)이
+        # 서버에 2차 인증 세션(tid)을 등록하며, 이를 건너뛰면 OTP를 맞게 넣어도
+        # 세션이 인증됨으로 승격되지 않는다.
+        await client.post(
+            sso.IOP_USER_STATUS_URL,
+            data={"user_id": user_id, "command": "auth"},
+            headers=headers,
+        )
+        await client.post(sso.IOP_PUSH_AUTH_URL, headers=headers)
+
         # 이메일 OTP 모드로 전환하면서 수신 주소를 받는다
         mask = await client.post(EMAIL_MASK_URL, headers=headers)
         masked_email = ""
