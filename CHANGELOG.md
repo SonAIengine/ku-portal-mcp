@@ -31,6 +31,20 @@
 > 업그레이드 방법은 [README의 "업데이트"](README.md#업데이트)를 참고하세요.
 > **uvx 사용자는 캐시 때문에 재시작만으로는 갱신되지 않습니다** (`uv cache clean ku-portal-mcp` 필요).
 
+## [0.17.2] - 2026-08-07
+
+### 수정
+- **`mcp` 의존성에 상한 추가 (`>=1.5.0,<2.0`).** 하한만 지정돼 있어 새로 설치하면
+  `mcp 2.0`이 딸려오는데, 2.0에서 `mcp.server.fastmcp`가 제거되어
+  서버가 `ModuleNotFoundError`로 시작조차 하지 못했다.
+
+      uvx ku-portal-mcp
+      → ModuleNotFoundError: No module named 'mcp.server.fastmcp'
+
+  기존 사용자는 이미 설치된 mcp 1.x를 쓰고 있어 드러나지 않았고,
+  **새로 설치하는 경우에만** 발생했다(0.12.0 등 이전 버전도 동일).
+  mcp 2.0은 API가 크게 달라져 별도 대응이 필요하다.
+
 ## [0.17.1] - 2026-08-07
 
 코드 리뷰에서 나온 정리. 기능 변경은 없습니다.
