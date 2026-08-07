@@ -41,6 +41,9 @@ CACHE_DIR = Path.home() / ".cache" / "ku-portal-mcp"
 AMS_SESSION_FILE = CACHE_DIR / _ams_auth.SESSION_FILE
 HELPER_PID_FILE = CACHE_DIR / "ams_auth.pid"
 
+# 헬퍼 프로세스 식별용 (PID 재사용 오인 방지)
+_HELPER_MODULE = "ku_portal_mcp._ams_auth"
+
 # AMS 세션은 서버가 3600초를 알려준다. 여유를 두고 50분만 재사용한다.
 AMS_SESSION_TTL = 50 * 60
 
@@ -149,13 +152,27 @@ def make_client(session: AmsSession | None = None, **kwargs) -> httpx.AsyncClien
 
 
 def _stop_helper() -> None:
-    """살아 있는 인증 헬퍼 프로세스를 정리한다."""
+    """살아 있는 인증 헬퍼 프로세스를 정리한다.
+
+    PID는 재사용되므로, 기록해 둔 PID가 정말 우리 헬퍼인지 확인한 뒤에만 종료한다.
+    확인 없이 kill하면 헬퍼가 이미 끝난 경우 무관한 프로세스를 죽일 수 있다.
+    """
     if not HELPER_PID_FILE.exists():
         return
+
     try:
-        os.kill(int(HELPER_PID_FILE.read_text().strip()), signal.SIGTERM)
-    except (OSError, ValueError):
+        pid = int(HELPER_PID_FILE.read_text().strip())
+        cmdline = subprocess.run(
+            ["ps", "-p", str(pid), "-o", "command="],
+            capture_output=True,
+            text=True,
+            timeout=5,
+        ).stdout
+        if _HELPER_MODULE in cmdline:
+            os.kill(pid, signal.SIGTERM)
+    except (OSError, ValueError, subprocess.SubprocessError):
         pass
+
     HELPER_PID_FILE.unlink(missing_ok=True)
 
 
@@ -194,7 +211,7 @@ async def start_login(menu_id: str = MENU_ENROLLMENT) -> str:
     CACHE_DIR.mkdir(parents=True, exist_ok=True)
 
     process = subprocess.Popen(
-        [sys.executable, "-m", "ku_portal_mcp._ams_auth", str(CACHE_DIR)],
+        [sys.executable, "-m", _HELPER_MODULE, str(CACHE_DIR)],
         stdout=subprocess.DEVNULL,
         stderr=subprocess.PIPE,
         cwd=str(Path(__file__).resolve().parent.parent),

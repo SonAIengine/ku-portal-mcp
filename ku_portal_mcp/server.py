@@ -7,8 +7,7 @@ Provides tools for accessing Korea University portal (KUPID):
 - Scholarship notices (bulletin API b=10, no auth)
 - Search across all boards
 - Library seat availability
-- Personal timetable
-- Course search & syllabus
+- Academic records via AMS (수강신청/시간표/성적/개설과목/강의실, 2차 인증 필요)
 - Canvas LMS (mylms.korea.ac.kr) integration
 """
 
@@ -48,9 +47,6 @@ from .timetable import (
     TimetableEntry,
     resolve_period_time,
     timetable_to_ics,
-)
-from .courses import (
-    fetch_my_courses,
 )
 from .dept_notices import fetch_dept_notice_list, fetch_dept_notice_detail
 from .dept_registry import resolve_site, list_all_sites, DEFAULT_SITES
@@ -126,23 +122,6 @@ async def _get_session() -> Session:
             logger.info("KUPID session expired, re-logging in")
         _session = await login()
         return _session
-
-
-async def _with_retry(fn, *args, **kwargs):
-    """Execute fn with session, auto re-login on stale session and retry once."""
-    try:
-        session = await _get_session()
-        return await fn(session, *args, **kwargs)
-    except _RETRIABLE as e:
-        logger.warning(
-            f"KUPID request failed ({type(e).__name__}: {e}), retrying with fresh session"
-        )
-        global _session
-        async with _session_lock:
-            clear_session()
-            _session = None
-        session = await _get_session()
-        return await fn(session, *args, **kwargs)
 
 
 def _format_posts(posts: list[BoardPost]) -> list[dict]:
@@ -795,7 +774,7 @@ async def kupid_room_schedule(
 
 
 # ──────────────────────────────────────────────
-# New: My enrolled courses (infodepot)
+# 학사 시스템(AMS) 조회 — 2차 보안인증 필요
 # ──────────────────────────────────────────────
 
 
@@ -1502,22 +1481,6 @@ async def kupid_lms_syllabus(
                 or keyword in (c.get("name") or "").upper()
             ]
             if not matched:
-                # Fallback: 학수번호로 infodepot 수강과목에서 과목명 찾아 재매칭
-                try:
-                    session = await _get_session()
-                    enrolled, _ = await fetch_my_courses(session)
-                    enrolled_match = [
-                        e for e in enrolled if keyword == e.course_code.upper()
-                    ]
-                    if enrolled_match:
-                        enroll_name = enrolled_match[0].course_name
-                        matched = [
-                            c for c in courses if enroll_name in (c.get("name") or "")
-                        ]
-                except Exception:
-                    pass
-
-            if not matched:
                 return {
                     "success": False,
                     "message": f"'{course_code}'에 해당하는 수강과목을 찾을 수 없습니다. "
@@ -1548,54 +1511,6 @@ async def kupid_lms_syllabus(
 
         if syllabus_html:
             soup = BeautifulSoup(syllabus_html, "lxml")
-
-            # iframe이 infodepot을 가리키면 직접 fetch하여 구조화된 데이터 반환
-            iframe = soup.find("iframe", src=re.compile(r"infodepot\.korea\.ac\.kr"))
-            if iframe:
-                iframe_src = iframe.get("src", "")
-                from urllib.parse import urlparse
-
-                parsed = urlparse(iframe_src)
-                if parsed.scheme not in ("http", "https") or not parsed.netloc.endswith(
-                    ".korea.ac.kr"
-                ):
-                    raise ValueError(f"Untrusted iframe src: {iframe_src!r}")
-                try:
-                    from .courses import (
-                        _establish_infodepot_session,
-                        parse_syllabus_structured,
-                        INFODEPOT_BASE,
-                    )
-                    from .auth import _BROWSER_HEADERS
-
-                    session = await _get_session()
-                    async with httpx.AsyncClient(
-                        timeout=30.0, follow_redirects=True
-                    ) as client:
-                        await _establish_infodepot_session(client, session)
-                        resp = await client.get(
-                            iframe_src,
-                            headers={
-                                **_BROWSER_HEADERS,
-                                "referer": f"{INFODEPOT_BASE}/lecture/LecMajorSub.jsp",
-                            },
-                        )
-                        html = resp.content.decode("euc-kr", errors="replace")
-                        structured = parse_syllabus_structured(html)
-                        if structured:
-                            return {
-                                "success": True,
-                                "course_id": course_id,
-                                "course_name": course_data.get("name"),
-                                "course_code": course_data.get("course_code"),
-                                "term": course_data.get("term", {}).get("name")
-                                if course_data.get("term")
-                                else None,
-                                "syllabus_url": f"https://mylms.korea.ac.kr/courses/{course_id}/assignments/syllabus",
-                                **structured,
-                            }
-                except Exception as e:
-                    logger.debug(f"Failed to fetch iframe content: {e}")
 
             syllabus_text = soup.get_text(separator="\n", strip=True)
 

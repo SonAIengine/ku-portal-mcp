@@ -187,17 +187,21 @@ async def fetch_board_page(
     """page/count 기반 조회. 서버 페이징 대신 넉넉히 받아 슬라이싱한다.
 
     무인증으로는 encQS 페이징을 쓸 수 없어, page*count 만큼 받아 잘라낸다.
-    page*count가 MAX_LIST_SIZE를 넘으면 빈 목록을 반환한다.
+
+    Raises:
+        RuntimeError: 요청 범위가 무인증 조회 상한을 넘을 때.
+            빈 목록을 돌려주면 "글이 없다"로 오인되므로 명시적으로 알린다.
     """
     page = max(page, 1)
     count = max(count, 1)
     needed = page * count
 
     if needed > MAX_LIST_SIZE:
-        logger.warning(
-            f"요청 범위({needed}건)가 무인증 조회 상한({MAX_LIST_SIZE}건)을 초과"
+        raise RuntimeError(
+            f"요청 범위({page}페이지 × {count}건 = {needed}건)가 "
+            f"무인증 조회 상한({MAX_LIST_SIZE}건)을 넘습니다. "
+            "포털이 그 이후 페이징을 로그인 세션에 묶어두어 조회할 수 없습니다."
         )
-        return [], 0
 
     posts, total = await fetch_board(board_id, limit=needed, campus=campus)
     return posts[(page - 1) * count : page * count], total
