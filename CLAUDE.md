@@ -15,9 +15,9 @@
 - 린트: `ruff check . --fix && ruff format .`
 
 ## 프로젝트 구조
-- `ku_portal_mcp/` — MCP 서버 코드 (tools 31개)
+- `ku_portal_mcp/` — MCP 서버 코드 (tools 30개)
 - `run.py` — 로컬 실행 진입점
-- `pyproject.toml` — 패키지 메타데이터 (현재 v0.12.0)
+- `pyproject.toml` — 패키지 메타데이터 (현재 v0.13.0)
 
 ## 배포 주의사항
 - PyPI 토큰: `~/.pypirc`에 설정됨

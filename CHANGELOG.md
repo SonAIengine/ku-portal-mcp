@@ -3,6 +3,42 @@
 이 프로젝트의 주요 변경사항을 기록합니다.
 [Keep a Changelog](https://keepachangelog.com/ko/1.1.0/) 형식을 따르며 [Semantic Versioning](https://semver.org/lang/ko/)을 사용합니다.
 
+## [0.13.0] - 2026-08-07
+
+2026년 고려대 **차세대 포털 전환** 대응 1단계. 레거시 백엔드가 서비스를 종료하면서
+공지·학사일정·장학 계열을 무인증 공개 API로 전환했습니다.
+
+### 배경 — 확인된 학교 시스템 변경
+- 레거시 포털 경로(`/front/Intro.kpd`, `/common/Login.kpd`, `/front/Main.kpd`)가 전부 `301 → /index.jsp`로 폐지.
+  새 인증은 `sso.korea.ac.kr/svc/tk/Auth.eps` 기반 SSO.
+- `infodepot.korea.ac.kr`, `grw.korea.ac.kr`, `ksso.korea.ac.kr` **서비스 종료** (TCP 443만 열려 있고 TLS 협상 실패).
+- 통합 로그인이 `ksso` → `sso.korea.ac.kr`로 이전, 엔드포인트 확장자도 `.do` → `.eps`로 변경.
+- **2026-07-20 13:00부터 학사·행정·연구·전자결재·LMS·통계에 2차 보안인증(OTP/푸시) 적용.**
+
+### 추가
+- `ku_portal_mcp/portal_api.py` — 차세대 포털 게시판 JSON API(`/ctt/svc/bulletin`) + 교무처 학사일정 클라이언트.
+  **인증 불필요.** 게시판 ID 매핑(공지 6, 장학 10, 부고 1, 행사 3, 세종 13 등) 포함.
+- `kupid_get_schedules`에 `month` 필터 — 특정 월 학사일정만 조회 (예: `month="9월"`).
+
+### 변경
+- **`kupid_get_notices` / `kupid_get_scholarships` / `kupid_search` — 로그인 불필요로 전환.**
+  GRW HTML 스크래핑 → 포털 공개 JSON API. 응답에 `department`, `views`, `is_notice`,
+  `attachments`, `comments`, `summary`, `total` 필드 추가.
+- **`kupid_get_schedules` — 게시판 목록에서 학사일정표로 소스 변경** (`registrar.korea.ac.kr`).
+  파라미터가 `page`/`count` → `year`/`semester`/`month`로 바뀌었습니다. 계절학기는 인접 정규학기로 매핑됩니다.
+- **`kupid_get_notice_detail` / `kupid_get_scholarship_detail` — 파라미터가 `notice_id`+`message_id` → `post_seq`로 변경.**
+  차세대 포털이 본문 전문·첨부에 로그인을 요구하므로 요약(약 200자)과 원문 링크를 반환합니다.
+- `kupid_search`의 `board` 옵션에서 `schedule` 제거 (학사일정은 게시판이 아님) → `all`/`notice`/`scholarship`.
+
+### 제거
+- **`kupid_get_schedule_detail`** — 학사일정이 게시판에서 표 형태로 바뀌어 상세 개념이 사라졌습니다. (tool 31개 → 30개)
+
+### 알려진 이슈
+- 로그인이 필요한 tool 22개(`kupid_login`, 수강/성적/시간표 6개, LMS 14개)는 SSO 이전과
+  2차 보안인증 대응이 끝날 때까지 동작하지 않습니다. 후속 단계에서 복구 예정입니다.
+- 무인증 게시판 조회는 최신 500건까지만 가능합니다. 포털이 그 이후 페이징을
+  암호화된 `encQS` URL + 로그인 세션에 묶어두었습니다.
+
 ## [0.12.0] - 2026-06-07
 
 ### 추가

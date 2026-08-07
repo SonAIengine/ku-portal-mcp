@@ -27,23 +27,35 @@
   </tr>
 </table>
 
+## ⚠️ 차세대 포털 전환 안내 (2026)
+
+고려대학교가 2026년 포털·학사 시스템을 차세대로 전면 교체하면서 다음 변경이 있었습니다.
+
+- 레거시 포털 경로(`*.kpd`)가 모두 폐지되고 `portal.korea.ac.kr/index.jsp` + SSO(`sso.korea.ac.kr`) 방식으로 전환
+- `infodepot` / `grw` / `ksso` 도메인 서비스 종료 → 로그인이 필요한 tool 다수가 동작 불가
+- **2026-07-20부터 학사·행정·LMS 등에 2차 보안인증(OTP/푸시) 적용**
+
+**공지·학사일정·장학·검색·도서관·학과공지는 로그인 없이 정상 동작합니다.** 나머지 tool은 순차적으로 복구 중입니다.
+
 ## 이런 걸 할 수 있어요
 
-### 1. 공지사항 / 학사일정 / 장학공지
+### 1. 공지사항 / 학사일정 / 장학공지 (로그인 불필요)
 
-KUPID 포털의 각종 게시판을 조회하고, 키워드로 검색할 수 있습니다.
+KUPID 포털 게시판과 교무처 학사일정을 **로그인 없이** 조회하고 검색할 수 있습니다.
 
 ```
 > 최근 공지사항 보여줘
 > "수강신청" 관련 공지 검색해줘
-> 이번 달 학사일정 알려줘
+> 이번 학기 학사일정 알려줘
+> 9월 학사일정만 보여줘
 > 장학금 관련 공지 있어?
-> 공지사항 3번째 글 상세 내용 보여줘
 ```
 
-- 공지사항, 학사일정, 장학공지 **목록 조회** + **상세 내용 열람**
-- 제목 기준 **키워드 통합 검색** (공지/일정/장학 동시 검색 가능)
-- 첨부파일 목록, 작성자, 작성일 등 메타 정보 포함
+- 공지사항(`b=6`), 장학공지(`b=10`) **목록 조회** — 작성자·부서·조회수·첨부 수·요약 포함
+- **학사일정** — 교무처 학사일정표에서 학기별 조회, 월 단위 필터 지원
+- 제목·요약 기준 **키워드 통합 검색**
+- 게시글 **본문 전문과 첨부파일은 포털 로그인이 필요**하여, 요약(약 200자)과 원문 링크를 제공합니다
+- 무인증 목록 조회는 **최신 500건**까지 지원합니다 (포털이 그 이후 페이징을 로그인 세션에 묶어둠)
 
 ### 2. 도서관 좌석 현황 (로그인 불필요)
 
@@ -184,39 +196,40 @@ KUPID의 **전체성적조회** 화면에서 최종 확정 성적과 누계 성�
 
 | # | Tool | 설명 | 인증 |
 |---|------|------|------|
-| 1 | `kupid_login` | 포털 로그인 / 세션 확인 | SSO |
-| 2 | `kupid_get_notices` | 공지사항 목록 | SSO |
-| 3 | `kupid_get_notice_detail` | 공지사항 상세 | SSO |
-| 4 | `kupid_get_schedules` | 학사일정 목록 | SSO |
-| 5 | `kupid_get_schedule_detail` | 학사일정 상세 | SSO |
-| 6 | `kupid_get_scholarships` | 장학공지 목록 | SSO |
-| 7 | `kupid_get_scholarship_detail` | 장학공지 상세 | SSO |
-| 8 | `kupid_search` | 공지/일정/장학 통합 검색 | SSO |
-| 9 | `kupid_get_library_seats` | 도서관 열람실 좌석 현황 | **불필요** |
-| 10 | `kupid_get_timetable` | 개인 수업시간표 + ICS 내보내기 | SSO |
-| 11 | `kupid_search_courses` | 개설과목 검색 (학부/대학원, `is_grad` 옵션) | SSO |
-| 12 | `kupid_get_syllabus` | 강의계획서 조회 | SSO |
-| 13 | `kupid_my_courses` | 내 수강신청 내역 (학수번호/시간/강의실) | SSO |
-| 14 | `kupid_room_schedule` | 건물/호실의 정규 수업 시간표 (학부+대학원 통합) | SSO |
-| 15 | `kupid_get_all_grades` | 전체 성적 / 누적 GPA / 취득학점 조회 | SSO |
-| 16 | `kupid_lms_courses` | LMS 수강과목 목록 | KSSO |
-| 17 | `kupid_lms_assignments` | LMS 과제 목록 (과목별) | KSSO |
-| 18 | `kupid_lms_modules` | LMS 강의자료 (주차별 모듈) | KSSO |
-| 19 | `kupid_lms_todo` | LMS 할 일 / 다가오는 이벤트 | KSSO |
-| 20 | `kupid_lms_dashboard` | LMS 대시보드 + 공지사항 | KSSO |
-| 21 | `kupid_lms_grades` | LMS 성적/점수 조회 | KSSO |
-| 22 | `kupid_lms_submissions` | LMS 과제 제출 현황 | KSSO |
-| 23 | `kupid_lms_quizzes` | LMS 퀴즈/시험 목록 | KSSO |
-| 24 | `kupid_lms_download_file` | LMS 강의자료 파일 다운로드 (PDF 등) | KSSO |
-| 25 | `kupid_lms_list_boards` | LMS 과목 게시판 목록 (Q&A, 강의자료실 등) | KSSO |
-| 26 | `kupid_lms_list_board_posts` | 게시판 게시글 목록 | KSSO |
-| 27 | `kupid_lms_get_board_post` | 게시글 상세 + 첨부파일 + **댓글(첨부 포함)** | KSSO |
-| 28 | `kupid_lms_announcements` | LMS 공지 전문 조회 (과목별 또는 전체, 본문 비절단) | KSSO |
-| 29 | `kupid_lms_syllabus` | LMS 강의계획서 조회 | KSSO |
-| 30 | `kupid_dept_notices` | 학과/대학원 홈페이지 공지 목록 | **불필요** |
-| 31 | `kupid_dept_notice_detail` | 학과/대학원 공지 상세 | **불필요** |
+| 1 | `kupid_login` | 포털 로그인 / 세션 확인 | SSO ⚠️ |
+| 2 | `kupid_get_notices` | 공지사항 목록 | **불필요** |
+| 3 | `kupid_get_notice_detail` | 공지사항 상세 (요약 + 원문 링크) | **불필요** |
+| 4 | `kupid_get_schedules` | 학사일정 (학기별, 월 필터) | **불필요** |
+| 5 | `kupid_get_scholarships` | 장학공지 목록 | **불필요** |
+| 6 | `kupid_get_scholarship_detail` | 장학공지 상세 (요약 + 원문 링크) | **불필요** |
+| 7 | `kupid_search` | 공지/장학 통합 검색 | **불필요** |
+| 8 | `kupid_get_library_seats` | 도서관 열람실 좌석 현황 | **불필요** |
+| 9 | `kupid_get_timetable` | 개인 수업시간표 + ICS 내보내기 | SSO ⚠️ |
+| 10 | `kupid_search_courses` | 개설과목 검색 (학부/대학원, `is_grad` 옵션) | SSO ⚠️ |
+| 11 | `kupid_get_syllabus` | 강의계획서 조회 | SSO ⚠️ |
+| 12 | `kupid_my_courses` | 내 수강신청 내역 (학수번호/시간/강의실) | SSO ⚠️ |
+| 13 | `kupid_room_schedule` | 건물/호실의 정규 수업 시간표 (학부+대학원 통합) | SSO ⚠️ |
+| 14 | `kupid_get_all_grades` | 전체 성적 / 누적 GPA / 취득학점 조회 | SSO ⚠️ |
+| 15 | `kupid_lms_courses` | LMS 수강과목 목록 | KSSO ⚠️ |
+| 16 | `kupid_lms_assignments` | LMS 과제 목록 (과목별) | KSSO ⚠️ |
+| 17 | `kupid_lms_modules` | LMS 강의자료 (주차별 모듈) | KSSO ⚠️ |
+| 18 | `kupid_lms_todo` | LMS 할 일 / 다가오는 이벤트 | KSSO ⚠️ |
+| 19 | `kupid_lms_dashboard` | LMS 대시보드 + 공지사항 | KSSO ⚠️ |
+| 20 | `kupid_lms_grades` | LMS 성적/점수 조회 | KSSO ⚠️ |
+| 21 | `kupid_lms_submissions` | LMS 과제 제출 현황 | KSSO ⚠️ |
+| 22 | `kupid_lms_quizzes` | LMS 퀴즈/시험 목록 | KSSO ⚠️ |
+| 23 | `kupid_lms_download_file` | LMS 강의자료 파일 다운로드 (PDF 등) | KSSO ⚠️ |
+| 24 | `kupid_lms_list_boards` | LMS 과목 게시판 목록 (Q&A, 강의자료실 등) | KSSO ⚠️ |
+| 25 | `kupid_lms_list_board_posts` | 게시판 게시글 목록 | KSSO ⚠️ |
+| 26 | `kupid_lms_get_board_post` | 게시글 상세 + 첨부파일 + **댓글(첨부 포함)** | KSSO ⚠️ |
+| 27 | `kupid_lms_announcements` | LMS 공지 전문 조회 (과목별 또는 전체, 본문 비절단) | KSSO ⚠️ |
+| 28 | `kupid_lms_syllabus` | LMS 강의계획서 조회 | KSSO ⚠️ |
+| 29 | `kupid_dept_notices` | 학과/대학원 홈페이지 공지 목록 | **불필요** |
+| 30 | `kupid_dept_notice_detail` | 학과/대학원 공지 상세 | **불필요** |
 
 > **인증 안내**: SSO = KUPID 포털 인증, KSSO = 고려대 통합 SSO (Canvas LMS용). 모두 같은 ID/PW를 사용하며, 환경변수만 설정하면 자동으로 로그인됩니다.
+>
+> ⚠️ 표시된 tool은 **2026년 차세대 포털 전환으로 현재 동작하지 않습니다.** 아래 "차세대 포털 전환 안내"를 참고하세요.
 
 ## 설치
 

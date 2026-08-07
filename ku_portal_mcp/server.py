@@ -2,9 +2,9 @@
 
 Provides tools for accessing Korea University portal (KUPID):
 - Login/session management
-- Notice board (kind=11)
-- Academic schedule (kind=89)
-- Scholarship notices (kind=88)
+- Notice board (bulletin API b=6, no auth)
+- Academic schedule (registrar.korea.ac.kr, no auth)
+- Scholarship notices (bulletin API b=10, no auth)
 - Search across all boards
 - Library seat availability
 - Personal timetable
@@ -26,7 +26,17 @@ from mcp.server.fastmcp import FastMCP
 
 from .academic import resolve_year_semester
 from .auth import login, clear_session, Session
-from .scraper import fetch_notice_list, fetch_notice_detail, NoticeItem
+from .portal_api import (
+    BoardPost,
+    BOARD_NAMES,
+    BOARD_NOTICE,
+    BOARD_SCHOLARSHIP,
+    MAX_LIST_SIZE,
+    fetch_academic_schedule,
+    fetch_board,
+    fetch_board_page,
+    search_boards,
+)
 from .library import (
     fetch_library_seats,
     fetch_all_seats,
@@ -141,17 +151,69 @@ async def _with_retry(fn, *args, **kwargs):
         return await fn(session, *args, **kwargs)
 
 
-def _format_items(items: list[NoticeItem], count: int) -> list[dict]:
+def _format_posts(posts: list[BoardPost]) -> list[dict]:
     return [
         {
-            "index": item.index,
-            "message_id": item.message_id,
-            "title": item.title,
-            "date": item.date,
-            "writer": item.writer,
+            "post_seq": post.post_seq,
+            "title": post.title,
+            "date": post.date,
+            "writer": post.writer,
+            "department": post.department,
+            "views": post.views,
+            "is_notice": post.is_notice,
+            "attachments": post.attachments,
+            "comments": post.comments,
+            "summary": post.summary,
+            "url": post.url,
         }
-        for item in items[:count]
+        for post in posts
     ]
+
+
+async def _find_post(board_id: int, post_seq: int) -> BoardPost | None:
+    """게시판 목록에서 post_seq에 해당하는 글을 찾는다.
+
+    무인증으로는 게시글 단건 조회 API가 없어 목록에서 선형 탐색한다.
+    """
+    posts, _ = await fetch_board(board_id, limit=MAX_LIST_SIZE)
+    for post in posts:
+        if post.post_seq == post_seq:
+            return post
+    return None
+
+
+def _normalize_calendar_semester(semester: str) -> str:
+    """학사일정표는 정규학기(1/2)만 지원하므로 계절학기를 인접 학기로 매핑한다.
+
+    학사일정표의 2학기는 8월~다음해 1월을 포함하므로, 여름(7~8월)과
+    겨울(1~2월) 계절학기는 모두 해당 학년도 2학기 표에 속한다.
+    """
+    return "2" if semester in ("summer", "winter") else semester
+
+
+async def _board_detail(board_id: int, post_seq: int, label: str) -> dict[str, Any]:
+    """게시글 상세를 반환한다. 본문 전문은 로그인이 필요해 요약만 제공한다."""
+    try:
+        post = await _find_post(board_id, post_seq)
+        if not post:
+            return {
+                "success": False,
+                "message": (
+                    f"post_seq={post_seq}인 {label}을(를) 최근 {MAX_LIST_SIZE}건에서 "
+                    f"찾지 못했습니다. 오래된 글은 무인증 조회 범위를 벗어납니다."
+                ),
+            }
+        return {
+            "success": True,
+            "detail": _format_posts([post])[0],
+            "note": (
+                "차세대 포털은 게시글 본문 전문과 첨부파일에 로그인을 요구합니다. "
+                "요약(summary)과 원문 링크(url)만 제공됩니다."
+            ),
+        }
+    except Exception as e:
+        logger.error(f"Failed to fetch {label} detail: {e}")
+        return {"success": False, "message": f"{label} 상세 조회 실패: {e}"}
 
 
 # ──────────────────────────────────────────────
@@ -180,22 +242,22 @@ async def kupid_login() -> dict[str, Any]:
 
 @server.tool()
 async def kupid_get_notices(page: int = 1, count: int = 20) -> dict[str, Any]:
-    """KUPID 포털의 공지사항 목록을 조회합니다.
+    """KUPID 포털의 공지사항 목록을 조회합니다. (로그인 불필요)
+
+    상단 고정 공지가 먼저 오고 그 다음 최신순으로 정렬됩니다.
+    무인증 조회는 최신 500건까지만 가능합니다.
 
     Args:
         page: 페이지 번호 (기본값: 1)
         count: 한 페이지당 항목 수 (기본값: 20)
     """
     try:
-
-        async def _fetch(session):
-            return await fetch_notice_list(session, kind="11", page=page, count=count)
-
-        items = await _with_retry(_fetch)
+        posts, total = await fetch_board_page(BOARD_NOTICE, page=page, count=count)
         return {
             "success": True,
-            "count": len(items),
-            "notices": _format_items(items, count),
+            "count": len(posts),
+            "total": total,
+            "notices": _format_posts(posts),
         }
     except Exception as e:
         logger.error(f"Failed to fetch notices: {e}")
@@ -203,64 +265,57 @@ async def kupid_get_notices(page: int = 1, count: int = 20) -> dict[str, Any]:
 
 
 @server.tool()
-async def kupid_get_notice_detail(
-    notice_id: str, message_id: str = ""
-) -> dict[str, Any]:
-    """KUPID 공지사항의 상세 내용을 조회합니다.
+async def kupid_get_notice_detail(post_seq: int) -> dict[str, Any]:
+    """KUPID 공지사항의 상세 정보를 조회합니다. (로그인 불필요)
+
+    차세대 포털은 본문 전문에 로그인을 요구하므로 요약과 원문 링크를 제공합니다.
 
     Args:
-        notice_id: 공지사항 index (kupid_get_notices 결과의 index 필드)
-        message_id: 공지사항 message_id (kupid_get_notices 결과의 message_id 필드)
+        post_seq: 공지사항 post_seq (kupid_get_notices 결과의 post_seq 필드)
     """
-    try:
-        item = NoticeItem(
-            index=notice_id,
-            message_id=message_id,
-            kind="11",
-            title="",
-            date="",
-            writer="",
-        )
-
-        async def _fetch(session):
-            return await fetch_notice_detail(session, item)
-
-        detail = await _with_retry(_fetch)
-        return {
-            "success": True,
-            "notice": {
-                "id": detail.id,
-                "title": detail.title,
-                "date": detail.date,
-                "writer": detail.writer,
-                "content": detail.content,
-                "attachments": detail.attachments,
-                "url": detail.url,
-            },
-        }
-    except Exception as e:
-        logger.error(f"Failed to fetch notice detail: {e}")
-        return {"success": False, "message": f"공지사항 상세 조회 실패: {e}"}
+    return await _board_detail(BOARD_NOTICE, post_seq, "공지사항")
 
 
 @server.tool()
-async def kupid_get_schedules(page: int = 1, count: int = 20) -> dict[str, Any]:
-    """KUPID 포털의 학사일정 목록을 조회합니다.
+async def kupid_get_schedules(
+    year: int = 0, semester: int = 0, month: str = ""
+) -> dict[str, Any]:
+    """고려대학교 학사일정을 조회합니다. (로그인 불필요)
+
+    교무처 학사일정표(registrar.korea.ac.kr)에서 학기별 일정을 가져옵니다.
 
     Args:
-        page: 페이지 번호 (기본값: 1)
-        count: 한 페이지당 항목 수 (기본값: 20)
+        year: 학년도 (예: 2026). 0이면 현재 학년도
+        semester: 학기 (1 또는 2). 0이면 현재 학기
+        month: 특정 월만 필터링 (예: "8월"). 비우면 전체
     """
     try:
+        resolved_year, resolved_semester = resolve_year_semester(
+            str(year) if year else "", str(semester) if semester else ""
+        )
+        resolved_semester = _normalize_calendar_semester(resolved_semester)
+        if resolved_semester not in ("1", "2"):
+            return {
+                "success": False,
+                "message": f"학사일정은 1 또는 2학기만 지원합니다 (입력: {semester})",
+            }
 
-        async def _fetch(session):
-            return await fetch_notice_list(session, kind="89", page=page, count=count)
+        entries, caption = await fetch_academic_schedule(
+            resolved_year, resolved_semester
+        )
 
-        items = await _with_retry(_fetch)
+        if month:
+            entries = [e for e in entries if e.month == month]
+
         return {
             "success": True,
-            "count": len(items),
-            "schedules": _format_items(items, count),
+            "year": resolved_year,
+            "semester": resolved_semester,
+            "caption": caption,
+            "count": len(entries),
+            "schedules": [
+                {"month": e.month, "date": e.date, "event": e.event} for e in entries
+            ],
         }
     except Exception as e:
         logger.error(f"Failed to fetch schedules: {e}")
@@ -268,64 +323,20 @@ async def kupid_get_schedules(page: int = 1, count: int = 20) -> dict[str, Any]:
 
 
 @server.tool()
-async def kupid_get_schedule_detail(
-    schedule_id: str, message_id: str = ""
-) -> dict[str, Any]:
-    """KUPID 학사일정의 상세 내용을 조회합니다.
-
-    Args:
-        schedule_id: 학사일정 index (kupid_get_schedules 결과의 index 필드)
-        message_id: 학사일정 message_id (kupid_get_schedules 결과의 message_id 필드)
-    """
-    try:
-        item = NoticeItem(
-            index=schedule_id,
-            message_id=message_id,
-            kind="89",
-            title="",
-            date="",
-            writer="",
-        )
-
-        async def _fetch(session):
-            return await fetch_notice_detail(session, item)
-
-        detail = await _with_retry(_fetch)
-        return {
-            "success": True,
-            "schedule": {
-                "id": detail.id,
-                "title": detail.title,
-                "date": detail.date,
-                "writer": detail.writer,
-                "content": detail.content,
-                "attachments": detail.attachments,
-                "url": detail.url,
-            },
-        }
-    except Exception as e:
-        logger.error(f"Failed to fetch schedule detail: {e}")
-        return {"success": False, "message": f"학사일정 상세 조회 실패: {e}"}
-
-
-@server.tool()
 async def kupid_get_scholarships(page: int = 1, count: int = 20) -> dict[str, Any]:
-    """KUPID 포털의 장학공지 목록을 조회합니다.
+    """KUPID 포털의 장학공지 목록을 조회합니다. (로그인 불필요)
 
     Args:
         page: 페이지 번호 (기본값: 1)
         count: 한 페이지당 항목 수 (기본값: 20)
     """
     try:
-
-        async def _fetch(session):
-            return await fetch_notice_list(session, kind="88", page=page, count=count)
-
-        items = await _with_retry(_fetch)
+        posts, total = await fetch_board_page(BOARD_SCHOLARSHIP, page=page, count=count)
         return {
             "success": True,
-            "count": len(items),
-            "scholarships": _format_items(items, count),
+            "count": len(posts),
+            "total": total,
+            "scholarships": _format_posts(posts),
         }
     except Exception as e:
         logger.error(f"Failed to fetch scholarships: {e}")
@@ -333,98 +344,55 @@ async def kupid_get_scholarships(page: int = 1, count: int = 20) -> dict[str, An
 
 
 @server.tool()
-async def kupid_get_scholarship_detail(
-    scholarship_id: str, message_id: str = ""
-) -> dict[str, Any]:
-    """KUPID 장학공지의 상세 내용을 조회합니다.
+async def kupid_get_scholarship_detail(post_seq: int) -> dict[str, Any]:
+    """KUPID 장학공지의 상세 정보를 조회합니다. (로그인 불필요)
+
+    차세대 포털은 본문 전문에 로그인을 요구하므로 요약과 원문 링크를 제공합니다.
 
     Args:
-        scholarship_id: 장학공지 index (kupid_get_scholarships 결과의 index 필드)
-        message_id: 장학공지 message_id (kupid_get_scholarships 결과의 message_id 필드)
+        post_seq: 장학공지 post_seq (kupid_get_scholarships 결과의 post_seq 필드)
     """
-    try:
-        item = NoticeItem(
-            index=scholarship_id,
-            message_id=message_id,
-            kind="88",
-            title="",
-            date="",
-            writer="",
-        )
-
-        async def _fetch(session):
-            return await fetch_notice_detail(session, item)
-
-        detail = await _with_retry(_fetch)
-        return {
-            "success": True,
-            "scholarship": {
-                "id": detail.id,
-                "title": detail.title,
-                "date": detail.date,
-                "writer": detail.writer,
-                "content": detail.content,
-                "attachments": detail.attachments,
-                "url": detail.url,
-            },
-        }
-    except Exception as e:
-        logger.error(f"Failed to fetch scholarship detail: {e}")
-        return {"success": False, "message": f"장학공지 상세 조회 실패: {e}"}
+    return await _board_detail(BOARD_SCHOLARSHIP, post_seq, "장학공지")
 
 
 @server.tool()
 async def kupid_search(
     keyword: str, board: str = "all", count: int = 20
 ) -> dict[str, Any]:
-    """KUPID 포털에서 키워드로 공지사항/학사일정/장학공지를 검색합니다.
+    """KUPID 포털 게시판에서 키워드로 검색합니다. (로그인 불필요)
 
-    제목에 키워드가 포함된 항목을 반환합니다.
+    제목 또는 요약에 키워드가 포함된 항목을 반환합니다.
+    학사일정은 게시판이 아니므로 kupid_get_schedules를 사용하세요.
 
     Args:
         keyword: 검색할 키워드
-        board: 검색 대상 ("all", "notice", "schedule", "scholarship")
+        board: 검색 대상 ("all", "notice", "scholarship")
         count: 최대 결과 수 (기본값: 20)
     """
     try:
         boards = {
-            "notice": "11",
-            "schedule": "89",
-            "scholarship": "88",
+            "notice": BOARD_NOTICE,
+            "scholarship": BOARD_SCHOLARSHIP,
         }
         if board == "all":
-            targets = boards.items()
+            target_ids = list(boards.values())
         elif board in boards:
-            targets = [(board, boards[board])]
+            target_ids = [boards[board]]
         else:
             return {
                 "success": False,
-                "message": f"잘못된 board: {board}. all/notice/schedule/scholarship 중 선택",
+                "message": f"잘못된 board: {board}. all/notice/scholarship 중 선택",
             }
 
-        results = []
-        kw_lower = keyword.lower()
+        matches = await search_boards(keyword, target_ids, limit=MAX_LIST_SIZE)
+        results = [
+            {
+                "board": BOARD_NAMES.get(board_id, str(board_id)),
+                **_format_posts([post])[0],
+            }
+            for board_id, post in matches[:count]
+        ]
 
-        for board_name, kind in targets:
-
-            async def _fetch(session, k=kind):
-                return await fetch_notice_list(session, kind=k)
-
-            items = await _with_retry(_fetch)
-            for item in items:
-                if kw_lower in item.title.lower():
-                    results.append(
-                        {
-                            "board": board_name,
-                            "index": item.index,
-                            "message_id": item.message_id,
-                            "title": item.title,
-                            "date": item.date,
-                            "writer": item.writer,
-                        }
-                    )
-
-        results = results[:count]
         return {
             "success": True,
             "keyword": keyword,
