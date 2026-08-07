@@ -55,6 +55,7 @@ _SALT_PATTERN = re.compile(r'ipt_password"\)\.val\(\)\s*\+\s*"\|([^"]+)"')
 _JS_LOCATION_PATTERN = re.compile(
     r'window\.location(?:\.href)?\s*=\s*["\']([^"\']+)["\']'
 )
+_SUBMIT_CALL_PATTERN = re.compile(r"\.submit\s*\(\s*\)")
 
 
 @dataclass
@@ -213,6 +214,31 @@ async def submit_login(
     return resp
 
 
+def _find_auto_submit_form(html: str):
+    """스크립트가 자동 제출하는 리다이렉트 폼을 찾는다. 없으면 None.
+
+    도착 페이지에도 로그아웃·검색 같은 폼이 있으므로, 아무 폼이나 제출하면
+    로그인 직후 로그아웃되는 식으로 흐름이 망가진다. 자동 제출 폼은
+    (1) 페이지에 `.submit()` 호출이 있고 (2) hidden 입력만 갖는다는 점으로 구분한다.
+    """
+    if not _SUBMIT_CALL_PATTERN.search(html):
+        return None
+
+    for form in BeautifulSoup(html, "lxml").find_all("form"):
+        if not form.get("action"):
+            continue
+        inputs = form.find_all("input")
+        if not inputs:
+            continue
+        if any((i.get("type") or "text").lower() != "hidden" for i in inputs):
+            continue  # 사용자 입력이 필요한 폼(로그인 등)
+        if not any(i.get("name") for i in inputs):
+            continue
+        return form
+
+    return None
+
+
 async def follow_auto_forms(
     client: httpx.AsyncClient, resp: httpx.Response, max_hops: int = 6
 ) -> httpx.Response:
@@ -226,20 +252,14 @@ async def follow_auto_forms(
     비밀번호 필드(`user_password`)를 가진 폼만 로그인 폼으로 판정한다.
     """
     for _ in range(max_hops):
-        form = BeautifulSoup(resp.text, "lxml").find("form")
+        form = _find_auto_submit_form(resp.text)
 
-        if form and form.get("action"):
-            if form.find("input", {"name": "user_password"}):
-                break
-
+        if form is not None:
             fields = {
                 i["name"]: (i.get("value") or "")
                 for i in form.find_all("input")
                 if i.get("name")
             }
-            if not fields:
-                break
-
             action = urljoin(str(resp.url), form["action"])
             resp = await client.post(action, data=fields, headers={"user-agent": _UA})
             continue
