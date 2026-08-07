@@ -96,16 +96,18 @@ async def _establish_grade_session(client: httpx.AsyncClient, session: Session) 
         for inp in lock_form.find_all("input")
         if inp.get("name")
     }
-    lock_data.update({
-        "url": INFODEPOT_BASE,
-        "path": ALL_GRADES_PATH,
-        "compId": "84",
-        "menuCd": "280",
-        "_target": "S",
-        "compDiv": "S",
-        "moveDiv": "moveComp",
-        "pw": _lock_password(),
-    })
+    lock_data.update(
+        {
+            "url": INFODEPOT_BASE,
+            "path": ALL_GRADES_PATH,
+            "compId": "84",
+            "menuCd": "280",
+            "_target": "S",
+            "compDiv": "S",
+            "moveDiv": "moveComp",
+            "pw": _lock_password(),
+        }
+    )
 
     lock_resp = await client.post(
         LOCK_MENU_URL,
@@ -127,14 +129,16 @@ async def _establish_grade_session(client: httpx.AsyncClient, session: Session) 
         for inp in gnb_form.find_all("input")
         if inp.get("name")
     }
-    gnb_data.update({
-        "url": INFODEPOT_BASE,
-        "path": ALL_GRADES_PATH,
-        "compId": "84",
-        "menuCd": "280",
-        "_target": "S",
-        "language": "ko",
-    })
+    gnb_data.update(
+        {
+            "url": INFODEPOT_BASE,
+            "path": ALL_GRADES_PATH,
+            "compId": "84",
+            "menuCd": "280",
+            "_target": "S",
+            "language": "ko",
+        }
+    )
 
     comp_resp = await client.post(
         COMPONENT_URL,
@@ -223,8 +227,10 @@ def parse_all_grades_html(html: str) -> GradePage:
 
 def _find_table_after_label(soup: BeautifulSoup, label: str):
     label_el = soup.find(
-        lambda tag: tag.name in {"span", "h3", "h4", "th", "strong"}
-        and label in tag.get_text(strip=True)
+        lambda tag: (
+            tag.name in {"span", "h3", "h4", "th", "strong"}
+            and label in tag.get_text(strip=True)
+        )
     )
     return label_el.find_next("table") if label_el else None
 

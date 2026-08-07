@@ -84,16 +84,18 @@ async def fetch_library_seats(library_code: int) -> list[ReadingRoomStatus]:
         else:
             hours = f"{start[:2]}:{start[2:]}-{end[:2]}:{end[2:]}"
 
-        rooms.append(ReadingRoomStatus(
-            room_name=room.get("name", ""),
-            room_name_eng=room.get("nameEng", ""),
-            total_seats=room.get("cnt", 0),
-            available=room.get("available", 0),
-            in_use=room.get("inUse", 0),
-            disabled=room.get("disabled", 0),
-            is_notebook_allowed=room.get("noteBookYN") == "Y",
-            operating_hours=hours,
-        ))
+        rooms.append(
+            ReadingRoomStatus(
+                room_name=room.get("name", ""),
+                room_name_eng=room.get("nameEng", ""),
+                total_seats=room.get("cnt", 0),
+                available=room.get("available", 0),
+                in_use=room.get("inUse", 0),
+                disabled=room.get("disabled", 0),
+                is_notebook_allowed=room.get("noteBookYN") == "Y",
+                operating_hours=hours,
+            )
+        )
 
     return rooms
 

@@ -1,4 +1,8 @@
-from ku_portal_mcp.timetable import TimetableEntry, _resolve_period_time, timetable_to_ics
+from ku_portal_mcp.timetable import (
+    TimetableEntry,
+    _resolve_period_time,
+    timetable_to_ics,
+)
 
 
 def test_resolve_period_time_for_range():

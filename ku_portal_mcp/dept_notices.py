@@ -26,6 +26,7 @@ _HEADERS = {
 @dataclass
 class DeptNotice:
     """A department notice list item."""
+
     article_no: str
     title: str
     writer: str
@@ -38,6 +39,7 @@ class DeptNotice:
 @dataclass
 class DeptNoticeDetail:
     """Full department notice detail."""
+
     article_no: str
     title: str
     content: str
@@ -85,10 +87,14 @@ async def fetch_dept_notice_list(
 
         title = link.get_text(strip=True)
         row_classes = row.get("class") or []
-        class_list: list[str] = row_classes if isinstance(row_classes, list) else [str(row_classes)]
-        is_pinned = "top-notice" in class_list or bool(
-            row.select_one(".top-notice-bg")
-        ) or "top-notice-bg" in " ".join(class_list)
+        class_list: list[str] = (
+            row_classes if isinstance(row_classes, list) else [str(row_classes)]
+        )
+        is_pinned = (
+            "top-notice" in class_list
+            or bool(row.select_one(".top-notice-bg"))
+            or "top-notice-bg" in " ".join(class_list)
+        )
         has_attachment = bool(row.select_one(".file-icon, .ico-file, img[alt*='파일']"))
 
         cells = [td.get_text(strip=True) for td in row.find_all("td")]
@@ -118,15 +124,17 @@ async def fetch_dept_notice_list(
                 views = cells[2]
                 date = cells[3]
 
-        items.append(DeptNotice(
-            article_no=article_no,
-            title=title,
-            writer=writer,
-            date=date,
-            views=views,
-            is_pinned=is_pinned,
-            has_attachment=has_attachment,
-        ))
+        items.append(
+            DeptNotice(
+                article_no=article_no,
+                title=title,
+                writer=writer,
+                date=date,
+                views=views,
+                is_pinned=is_pinned,
+                has_attachment=has_attachment,
+            )
+        )
 
         if len(items) >= limit:
             break
@@ -134,9 +142,7 @@ async def fetch_dept_notice_list(
     return items
 
 
-async def fetch_dept_notice_detail(
-    base_url: str, article_no: str
-) -> DeptNoticeDetail:
+async def fetch_dept_notice_detail(base_url: str, article_no: str) -> DeptNoticeDetail:
     """Fetch detail page for a specific notice article.
 
     Args:
@@ -186,6 +192,7 @@ async def fetch_dept_notice_detail(
     # Attachments
     attachments = []
     from urllib.parse import urlparse
+
     for a_tag in soup.select("a[href*='mode=download']"):
         raw_href = a_tag.get("href") or ""
         href_s = raw_href if isinstance(raw_href, str) else str(raw_href)

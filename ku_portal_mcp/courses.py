@@ -384,10 +384,14 @@ async def search_grad_courses(
         )
         html = resp.content.decode("euc-kr", errors="replace")
 
-    return _parse_grad_course_table(html, default_campus="서울" if campus == "1" else "세종")
+    return _parse_grad_course_table(
+        html, default_campus="서울" if campus == "1" else "세종"
+    )
 
 
-def _parse_grad_course_table(html: str, default_campus: str = "서울") -> list[CourseInfo]:
+def _parse_grad_course_table(
+    html: str, default_campus: str = "서울"
+) -> list[CourseInfo]:
     """Parse graduate course HTML table.
 
     Column layout (no campus column):
@@ -1149,7 +1153,13 @@ def parse_syllabus_structured(html: str) -> dict:
 
     # --- 학습계획 (과목개요, 학습목표, 선수과목, 교재, 과제물) ---
     learning_plan: dict[str, str] = {}
-    plan_fields = ["과목개요", "학습목표", "추천 선수과목 및 수강요건", "수업자료(교재)", "과제물"]
+    plan_fields = [
+        "과목개요",
+        "학습목표",
+        "추천 선수과목 및 수강요건",
+        "수업자료(교재)",
+        "과제물",
+    ]
     for field in plan_fields:
         th = soup.find("th", string=re.compile(re.escape(field)))
         if not th:
@@ -1161,7 +1171,11 @@ def parse_syllabus_structured(html: str) -> dict:
             td = tbody.find("td") if tbody else None
         else:
             row = th.find_parent("tr")
-            td = row.find_next_sibling("tr").find("td") if row and row.find_next_sibling("tr") else None
+            td = (
+                row.find_next_sibling("tr").find("td")
+                if row and row.find_next_sibling("tr")
+                else None
+            )
         if td:
             for br in td.find_all("br"):
                 br.replace_with("\n")
@@ -1178,7 +1192,7 @@ def parse_syllabus_structured(html: str) -> dict:
         table = week_span.find_next("table")
         if table:
             tbody = table.find("tbody")
-            for row in (tbody.find_all("tr") if tbody else []):
+            for row in tbody.find_all("tr") if tbody else []:
                 cells = [td.get_text(strip=True) for td in row.find_all("td")]
                 if len(cells) >= 4 and cells[0].isdigit():
                     entry: dict[str, str] = {

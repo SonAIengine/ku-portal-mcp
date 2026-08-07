@@ -141,7 +141,13 @@ def test_kupid_search_courses_returns_department_selection_output(monkeypatch):
     structured = _assert_text_block_matches_structured_output(
         _call_tool(
             "kupid_search_courses",
-            {"year": "2026", "semester": "1", "college": "5720", "department": "", "campus": "1"},
+            {
+                "year": "2026",
+                "semester": "1",
+                "college": "5720",
+                "department": "",
+                "campus": "1",
+            },
         )
     )
 
@@ -154,7 +160,9 @@ def test_kupid_search_courses_returns_course_results(monkeypatch):
     async def fake_get_session():
         return object()
 
-    async def fake_search_courses(session, year=None, semester=None, campus="1", college="", department=""):
+    async def fake_search_courses(
+        session, year=None, semester=None, campus="1", college="", department=""
+    ):
         assert year == "2026"
         assert semester == "1"
         assert campus == "1"
@@ -179,7 +187,13 @@ def test_kupid_search_courses_returns_course_results(monkeypatch):
     structured = _assert_text_block_matches_structured_output(
         _call_tool(
             "kupid_search_courses",
-            {"year": "2026", "semester": "1", "college": "5720", "department": "5722", "campus": "1"},
+            {
+                "year": "2026",
+                "semester": "1",
+                "college": "5720",
+                "department": "5722",
+                "campus": "1",
+            },
         )
     )
 
@@ -203,7 +217,9 @@ def test_kupid_get_syllabus_returns_mcp_serialized_output(monkeypatch):
     async def fake_get_session():
         return object()
 
-    async def fake_fetch_syllabus(session, course_code, section="00", year=None, semester=None):
+    async def fake_fetch_syllabus(
+        session, course_code, section="00", year=None, semester=None
+    ):
         assert course_code == "COSE101"
         assert section == "01"
         assert year == "2026"
@@ -216,7 +232,12 @@ def test_kupid_get_syllabus_returns_mcp_serialized_output(monkeypatch):
     structured = _assert_text_block_matches_structured_output(
         _call_tool(
             "kupid_get_syllabus",
-            {"course_code": "COSE101", "section": "01", "year": "2026", "semester": "1"},
+            {
+                "course_code": "COSE101",
+                "section": "01",
+                "year": "2026",
+                "semester": "1",
+            },
         )
     )
 
@@ -250,12 +271,19 @@ def test_kupid_dept_notices_returns_mcp_serialized_output(monkeypatch):
     monkeypatch.setattr(
         server_module,
         "resolve_site",
-        lambda site_name: {"label": "테스트학과", "url": "https://dept.example.com/notice.do"},
+        lambda site_name: {
+            "label": "테스트학과",
+            "url": "https://dept.example.com/notice.do",
+        },
     )
-    monkeypatch.setattr(server_module, "fetch_dept_notice_list", fake_fetch_dept_notice_list)
+    monkeypatch.setattr(
+        server_module, "fetch_dept_notice_list", fake_fetch_dept_notice_list
+    )
 
     structured = _assert_text_block_matches_structured_output(
-        _call_tool("kupid_dept_notices", {"site_name": "테스트학과", "page": 2, "count": 20})
+        _call_tool(
+            "kupid_dept_notices", {"site_name": "테스트학과", "page": 2, "count": 20}
+        )
     )
 
     assert structured["success"] is True
