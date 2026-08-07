@@ -19,6 +19,7 @@ import logging
 import os
 import re
 from dataclasses import dataclass
+from urllib.parse import urljoin
 
 import httpx
 from bs4 import BeautifulSoup
@@ -207,6 +208,61 @@ async def submit_login(
     )
     resp.raise_for_status()
     return resp
+
+
+async def follow_auto_forms(
+    client: httpx.AsyncClient, resp: httpx.Response, max_hops: int = 6
+) -> httpx.Response:
+    """`window.onload`로 자동 제출되는 리다이렉트 폼 체인을 따라간다.
+
+    SSO 구간은 302가 아니라 hidden 필드를 담은 자동 제출 폼으로 이어지므로
+    httpx의 follow_redirects만으로는 흐름이 끊긴다. 로그인 폼(`loginFrm`)에
+    도달하면 사용자 입력이 필요한 지점이므로 멈춘다.
+    """
+    for _ in range(max_hops):
+        form = BeautifulSoup(resp.text, "lxml").find("form")
+        if not form or not form.get("action"):
+            break
+        if form.get("name") == "loginFrm":
+            break
+
+        fields = {
+            i["name"]: (i.get("value") or "")
+            for i in form.find_all("input")
+            if i.get("name")
+        }
+        if not fields:
+            break
+
+        action = urljoin(str(resp.url), form["action"])
+        resp = await client.post(action, data=fields, headers={"user-agent": _UA})
+
+    return resp
+
+
+async def login_to_service(
+    client: httpx.AsyncClient, idp_url: str, user_id: str, password: str
+) -> httpx.Response:
+    """서비스의 IdP 진입점에서 시작해 SSO 로그인을 완주한다.
+
+    서비스(LMS/포털)마다 IdP 진입 URL과 RelayState가 다르므로, 진입 URL을
+    받아 로그인 폼까지 따라간 뒤 로그인하고 콜백까지 마친 응답을 반환한다.
+    세션 쿠키는 client에 누적된다.
+    """
+    resp = await client.get(idp_url, headers={"user-agent": _UA, "accept": "text/html"})
+    resp.raise_for_status()
+
+    resp = await follow_auto_forms(client, resp)
+    page = parse_login_page(resp.text, str(resp.url))
+
+    resp = await submit_login(client, page, user_id, password)
+    if "ssosession" not in client.cookies:
+        raise RuntimeError(
+            "SSO 로그인에 실패했습니다. KU_PORTAL_ID / KU_PORTAL_PW를 확인하세요. "
+            "(셸 설정에서 큰따옴표 안에 백슬래시를 쓰면 값에 그대로 포함됩니다)"
+        )
+
+    return await follow_auto_forms(client, resp)
 
 
 async def check_second_factor(
