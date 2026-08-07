@@ -45,8 +45,8 @@ from .library import (
     LIBRARY_CODES,
 )
 from .timetable import (
-    fetch_timetable_day,
-    fetch_full_timetable,
+    TimetableEntry,
+    resolve_period_time,
     timetable_to_ics,
 )
 from .courses import (
@@ -61,7 +61,6 @@ from .courses import (
 )
 from .dept_notices import fetch_dept_notice_list, fetch_dept_notice_detail
 from .dept_registry import resolve_site, list_all_sites, DEFAULT_SITES
-from .grades import fetch_all_grades
 from .lms import (
     lms_login,
     LMSSession,
@@ -244,6 +243,83 @@ async def _board_detail(board_id: int, post_seq: int, label: str) -> dict[str, A
             "attachments": detail.attachments,
         },
     }
+
+
+# AMS 시간표 격자의 요일 접두어 → 표시 이름
+_DAY_LABELS = {
+    "mon": "월",
+    "tue": "화",
+    "wed": "수",
+    "thu": "목",
+    "fri": "금",
+    "sat": "토",
+}
+
+
+async def _resolve_ams_term(
+    session: ams.AmsSession, year: str = "", semester: str = ""
+) -> str:
+    """학년도/학기를 AMS 학기 코드(예: 20261R)로 바꾼다.
+
+    조회 가능한 학기만 서버가 알려주므로, 지정된 값이 목록에 없으면
+    가장 최근 학기로 되돌린다.
+    """
+    terms = await ams.fetch_terms(session)
+    if not terms:
+        raise RuntimeError("조회 가능한 학기가 없습니다.")
+
+    if year and semester:
+        wanted = f"{year}{semester}R"
+        for term in terms:
+            if term.get("code") == wanted:
+                return term["code"]
+        logger.warning(f"{wanted} 학기를 찾지 못해 최근 학기로 조회합니다")
+
+    return terms[0]["code"]
+
+
+def _sum_credits(rows: list[dict]) -> float:
+    """'2.0(2)' 형태의 학점 문자열을 합산한다."""
+    total = 0.0
+    for row in rows:
+        raw = (row.get("cdtTime") or "").split("(")[0].strip()
+        try:
+            total += float(raw)
+        except ValueError:
+            continue
+    return round(total, 1)
+
+
+def _cell_classroom(cell: str) -> str:
+    """격자 칸에서 강의실만 뽑는다.
+
+    칸은 '<학수번호-분반><br><과목명><br><교수><br><강의실>' 형태로 온다.
+    """
+    parts = [p.strip() for p in re.split(r"<br\s*/?>", cell or "") if p.strip()]
+    return parts[-1] if len(parts) > 1 else ""
+
+
+def _grid_to_entries(grid: list[dict]) -> list[TimetableEntry]:
+    """AMS 시간표 격자(교시 행 × 요일 열)를 시간표 항목 목록으로 편다."""
+    entries = []
+    for row in grid:
+        period = (row.get("timeTime") or "").replace("교시", "").strip()
+        start, end = resolve_period_time(period)
+        for prefix, label in _DAY_LABELS.items():
+            subject = row.get(f"{prefix}SubjtNm")
+            if not subject:
+                continue
+            entries.append(
+                TimetableEntry(
+                    day_of_week=label,
+                    period=period,
+                    subject_name=subject,
+                    classroom=_cell_classroom(row.get(f"{prefix}Nm") or ""),
+                    start_time=start,
+                    end_time=end,
+                )
+            )
+    return entries
 
 
 async def _get_ams_session() -> ams.AmsSession:
@@ -572,40 +648,34 @@ async def kupid_get_library_seats(library_name: str = "") -> dict[str, Any]:
 
 @server.tool()
 async def kupid_get_timetable(
-    day: str = "all", ics_export: bool = False
+    day: str = "all", ics_export: bool = False, year: str = "", semester: str = ""
 ) -> dict[str, Any]:
-    """개인 수업시간표를 조회합니다 (SSO 로그인 필요).
-
-    포털 메인 페이지의 시간표 위젯 데이터를 파싱합니다.
+    """개인 수업시간표를 조회합니다 (AMS 2차 인증 필요).
 
     Args:
-        day: 요일 ("all"=전체, "mon"/"tue"/"wed"/"thu"/"fri")
+        day: 요일 ("all"=전체, "mon"/"tue"/"wed"/"thu"/"fri"/"sat")
         ics_export: True이면 ICS 캘린더 파일 내용도 포함
+        year: 학년도 (기본값: 현재 학기)
+        semester: 학기 ("1" 또는 "2")
     """
     try:
-        day_map = {"mon": 1, "tue": 2, "wed": 3, "thu": 4, "fri": 5}
+        session = await _get_ams_session()
+        term = await _resolve_ams_term(session, year, semester)
+        grid = await ams.fetch_timetable(session, term)
+        entries = _grid_to_entries(grid)
 
-        if day == "all":
-
-            async def _fetch(session):
-                return await fetch_full_timetable(session)
-
-            entries = await _with_retry(_fetch)
-        elif day in day_map:
-            d = day_map[day]
-
-            async def _fetch_day(session, d=d):
-                return await fetch_timetable_day(session, d)
-
-            entries = await _with_retry(_fetch_day)
-        else:
-            return {
-                "success": False,
-                "message": f"잘못된 요일: {day}. all/mon/tue/wed/thu/fri 중 선택",
-            }
+        if day != "all":
+            if day not in _DAY_LABELS:
+                return {
+                    "success": False,
+                    "message": f"잘못된 day: {day}. all/mon/tue/wed/thu/fri/sat 중 선택",
+                }
+            entries = [e for e in entries if e.day_of_week == _DAY_LABELS[day]]
 
         result = {
             "success": True,
+            "term": term,
+            "day": day,
             "count": len(entries),
             "timetable": [
                 {
@@ -619,13 +689,8 @@ async def kupid_get_timetable(
                 for e in entries
             ],
         }
-
-        if not entries:
-            result["message"] = "등록된 수업이 없습니다"
-
-        if ics_export and entries:
-            result["ics_content"] = timetable_to_ics(entries)
-
+        if ics_export:
+            result["ics"] = timetable_to_ics(entries)
         return result
     except Exception as e:
         logger.error(f"Failed to fetch timetable: {e}")
@@ -859,44 +924,41 @@ async def kupid_get_syllabus(
 
 @server.tool()
 async def kupid_my_courses(year: str = "", semester: str = "") -> dict[str, Any]:
-    """내 수강신청 내역을 조회합니다 (SSO 로그인 필요).
+    """내 수강신청 내역을 조회합니다 (AMS 2차 인증 필요).
 
     학수번호, 강의시간, 강의실, 교수, 학점, 이수구분 등 상세 정보를 반환합니다.
     대학원 과목도 포함됩니다.
 
     Args:
         year: 학년도 (기본값: 현재 학기 기준 자동 선택)
-        semester: 학기 ("1"=1학기, "2"=2학기, "summer"=여름학기, "winter"=겨울학기)
+        semester: 학기 ("1"=1학기, "2"=2학기)
     """
     try:
-        year, semester = resolve_year_semester(year, semester)
+        session = await _get_ams_session()
+        term = await _resolve_ams_term(session, year, semester)
+        rows = await ams.fetch_enrollment(session, term)
 
-        async def _fetch(session):
-            return await fetch_my_courses(session, year=year, semester=semester)
-
-        courses, total_credits = await _with_retry(_fetch)
+        courses = [
+            {
+                "course_code": r.get("sbjtnb") or "",
+                "section": r.get("dvcno") or "",
+                "course_name": r.get("subjtNm") or "",
+                "professor": r.get("cgprfNmLisup") or "",
+                "credits": r.get("cdtTime") or "",
+                "course_type": (r.get("cmpsjNm") or "").strip(),
+                "schedule": r.get("lctreTimePlaceLisup") or "",
+                "status": r.get("sttusNm") or "",
+                "payment": r.get("payDt") or "",
+                "dept_code": r.get("estblDeprtCd") or "",
+            }
+            for r in rows
+        ]
         return {
             "success": True,
-            "year": year,
-            "semester": semester,
-            "total_credits": total_credits,
+            "term": term,
             "count": len(courses),
-            "courses": [
-                {
-                    "course_code": c.course_code,
-                    "section": c.section,
-                    "course_type": c.course_type,
-                    "course_name": c.course_name,
-                    "professor": c.professor,
-                    "credits": c.credits,
-                    "schedule": c.schedule,
-                    "retake": c.retake,
-                    "status": c.status,
-                    "grad_code": c.grad_code,
-                    "dept_code": c.dept_code,
-                }
-                for c in courses
-            ],
+            "total_credits": _sum_credits(rows),
+            "courses": courses,
         }
     except Exception as e:
         logger.error(f"Failed to fetch my courses: {e}")
@@ -905,83 +967,52 @@ async def kupid_my_courses(year: str = "", semester: str = "") -> dict[str, Any]
 
 @server.tool()
 async def kupid_get_all_grades(year_term: str = "") -> dict[str, Any]:
-    """전체 성적, 누적 GPA, 취득학점을 조회합니다 (SSO 로그인 필요).
-
-    KUPID 학적/졸업 > 성적사항 > 전체성적조회 화면의 최종 확정 성적을 가져옵니다.
+    """전체 성적, 누적 GPA, 취득학점을 조회합니다 (AMS 2차 인증 필요).
 
     Args:
-        year_term: 조회할 학년도/학기 코드 (예: "20242R"). 비우면 전체 조회
+        year_term: 학년도/학기 코드로 필터 (예: "20261R"). 비우면 전체
     """
     try:
+        session = await _get_ams_session()
+        rows, summary = await ams.fetch_grades(session)
 
-        async def _fetch(session):
-            return await fetch_all_grades(session, year_term=year_term)
+        if year_term:
+            rows = [
+                r for r in rows if f"{r.get('syy')}{r.get('smtDivcd')}" == year_term
+            ]
 
-        page = await _with_retry(_fetch)
-        latest_summary = page.summaries[-1] if page.summaries else None
+        grades = [
+            {
+                "year": r.get("syy") or "",
+                "semester": r.get("smtDivcd") or "",
+                "course_code": r.get("sbjtnb") or "",
+                "section": r.get("dvcno") or "",
+                "course_name": r.get("subjtNm") or "",
+                "course_type": r.get("cmpsjDivNm") or "",
+                "credits": r.get("cdt"),
+                "grade": r.get("gradeGrdDivcd") or "",
+                "grade_point": r.get("cmpsjGp"),
+                "retake_of": r.get("ratlcSyySmtNm") or "",
+            }
+            for r in rows
+        ]
 
+        acmtl = summary[0] if summary else {}
         return {
             "success": True,
-            "year_term": year_term or None,
-            "available_year_terms": page.available_year_terms,
-            "record_count": len(page.records),
-            "records": [
-                {
-                    "year": record.year,
-                    "term": record.term,
-                    "course_code": record.course_code,
-                    "course_name": record.course_name,
-                    "completion_type": record.completion_type,
-                    "course_type": record.course_type,
-                    "credits": record.credits,
-                    "score": record.score,
-                    "grade": record.grade,
-                    "gpa": record.gpa,
-                    "retake_year": record.retake_year,
-                    "retake_term": record.retake_term,
-                    "retake_course": record.retake_course,
-                    "deletion_type": record.deletion_type,
-                }
-                for record in page.records
-            ],
-            "summary_count": len(page.summaries),
-            "summaries": [
-                {
-                    "year": summary.year,
-                    "term": summary.term,
-                    "major_registered_credits": summary.major_registered_credits,
-                    "major_earned_credits": summary.major_earned_credits,
-                    "prerequisite_earned_credits": summary.prerequisite_earned_credits,
-                    "research_earned_credits": summary.research_earned_credits,
-                    "total_grade_points": summary.total_grade_points,
-                    "official_gpa": summary.official_gpa,
-                    "overall_gpa": summary.overall_gpa,
-                    "official_converted_score": summary.official_converted_score,
-                    "rank_for_certificate": summary.rank_for_certificate,
-                }
-                for summary in page.summaries
-            ],
-            "latest_summary": (
-                {
-                    "year": latest_summary.year,
-                    "term": latest_summary.term,
-                    "major_registered_credits": latest_summary.major_registered_credits,
-                    "major_earned_credits": latest_summary.major_earned_credits,
-                    "prerequisite_earned_credits": latest_summary.prerequisite_earned_credits,
-                    "research_earned_credits": latest_summary.research_earned_credits,
-                    "total_grade_points": latest_summary.total_grade_points,
-                    "official_gpa": latest_summary.official_gpa,
-                    "overall_gpa": latest_summary.overall_gpa,
-                    "official_converted_score": latest_summary.official_converted_score,
-                    "rank_for_certificate": latest_summary.rank_for_certificate,
-                }
-                if latest_summary
-                else None
-            ),
+            "count": len(grades),
+            "grades": grades,
+            "summary": {
+                "gpa": acmtl.get("gpa"),
+                "earned_credits": acmtl.get("aplyCdt"),
+                "total_grade_points": acmtl.get("tgp"),
+                "converted_score": acmtl.get("covsnSco"),
+                "major_credits": acmtl.get("cmpsjCdt"),
+            },
         }
     except Exception as e:
-        logger.error(f"Failed to fetch all grades: {e}")
-        return {"success": False, "message": f"전체 성적 조회 실패: {e}"}
+        logger.error(f"Failed to fetch grades: {e}")
+        return {"success": False, "message": f"성적 조회 실패: {e}"}
 
 
 # ──────────────────────────────────────────────

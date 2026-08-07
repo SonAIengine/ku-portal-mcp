@@ -2,9 +2,8 @@ import asyncio
 import json
 
 import ku_portal_mcp.server as server_module
-from ku_portal_mcp.courses import CourseInfo, EnrolledCourse
+from ku_portal_mcp.courses import CourseInfo
 from ku_portal_mcp.dept_notices import DeptNotice
-from ku_portal_mcp.grades import GradePage, GradeRecord, GradeSummary
 from ku_portal_mcp.library import ReadingRoomStatus
 
 
@@ -70,57 +69,47 @@ def test_kupid_get_library_seats_returns_mcp_serialized_output(monkeypatch):
 
 
 def test_kupid_my_courses_returns_mcp_serialized_output(monkeypatch):
-    async def fake_get_session():
+    async def fake_get_ams_session():
         return object()
 
-    async def fake_fetch_my_courses(session, year=None, semester=None):
-        assert year == "2026"
-        assert semester == "1"
-        return (
-            [
-                EnrolledCourse(
-                    course_code="COSE101",
-                    section="01",
-                    course_type="전공필수",
-                    course_name="컴퓨터프로그래밍",
-                    professor="홍길동",
-                    credits="3(3)",
-                    schedule="월(1-2) 우당교양관 101호",
-                    retake=False,
-                    status="신청",
-                    grad_code="5720",
-                    dept_code="5722",
-                )
-            ],
-            "3",
-        )
+    async def fake_fetch_terms(session):
+        return [{"code": "20261R", "fullNm": "2026학년도 1학기"}]
 
-    monkeypatch.setattr(server_module, "_get_session", fake_get_session)
-    monkeypatch.setattr(server_module, "fetch_my_courses", fake_fetch_my_courses)
+    async def fake_fetch_enrollment(session, term):
+        assert term == "20261R"
+        return [
+            {
+                "sbjtnb": "COSE101",
+                "dvcno": "01",
+                "subjtNm": "컴퓨터프로그래밍",
+                "cgprfNmLisup": "홍길동",
+                "cdtTime": "3.0(3)",
+                "cmpsjNm": "전공필수 ",
+                "lctreTimePlaceLisup": "월(1-2) 우당교양관 101호",
+                "sttusNm": "신청",
+                "payDt": "미수납",
+                "estblDeprtCd": "5722",
+            }
+        ]
+
+    monkeypatch.setattr(server_module, "_get_ams_session", fake_get_ams_session)
+    monkeypatch.setattr(server_module.ams, "fetch_terms", fake_fetch_terms)
+    monkeypatch.setattr(server_module.ams, "fetch_enrollment", fake_fetch_enrollment)
 
     structured = _assert_text_block_matches_structured_output(
         _call_tool("kupid_my_courses", {"year": "2026", "semester": "1"})
     )
 
     assert structured["success"] is True
-    assert structured["year"] == "2026"
-    assert structured["semester"] == "1"
-    assert structured["total_credits"] == "3"
-    assert structured["courses"] == [
-        {
-            "course_code": "COSE101",
-            "section": "01",
-            "course_type": "전공필수",
-            "course_name": "컴퓨터프로그래밍",
-            "professor": "홍길동",
-            "credits": "3(3)",
-            "schedule": "월(1-2) 우당교양관 101호",
-            "retake": False,
-            "status": "신청",
-            "grad_code": "5720",
-            "dept_code": "5722",
-        }
-    ]
+    assert structured["term"] == "20261R"
+    assert structured["total_credits"] == 3.0
+    assert structured["count"] == 1
+    course = structured["courses"][0]
+    assert course["course_code"] == "COSE101"
+    assert course["course_name"] == "컴퓨터프로그래밍"
+    assert course["professor"] == "홍길동"
+    assert course["course_type"] == "전공필수"
+    assert course["schedule"] == "월(1-2) 우당교양관 101호"
 
 
 def test_kupid_search_courses_returns_department_selection_output(monkeypatch):
@@ -340,61 +329,47 @@ def test_kupid_lms_courses_returns_mcp_serialized_output(monkeypatch):
 
 
 def test_kupid_get_all_grades_returns_mcp_serialized_output(monkeypatch):
-    async def fake_get_session():
+    async def fake_get_ams_session():
         return object()
 
-    async def fake_fetch_all_grades(session, year_term=""):
-        assert year_term == "20242R"
-        return GradePage(
-            available_year_terms=[{"value": "20242R", "label": "2024학년도 2학기"}],
-            records=[
-                GradeRecord(
-                    year="2024",
-                    term="2학기",
-                    course_code="COSE101",
-                    course_name="컴퓨터프로그래밍",
-                    completion_type="전공필수",
-                    course_type="전공",
-                    credits="3",
-                    score="95",
-                    grade="A+",
-                    gpa="4.5",
-                    retake_year="",
-                    retake_term="",
-                    retake_course="",
-                    deletion_type="",
-                )
-            ],
-            summaries=[
-                GradeSummary(
-                    year="2024",
-                    term="2학기",
-                    major_registered_credits="21",
-                    major_earned_credits="18",
-                    prerequisite_earned_credits="0",
-                    research_earned_credits="0",
-                    total_grade_points="54.0",
-                    official_gpa="4.20",
-                    overall_gpa="4.10",
-                    official_converted_score="98.0",
-                    rank_for_certificate="1 / 30",
-                )
-            ],
-        )
+    async def fake_fetch_grades(session):
+        rows = [
+            {
+                "syy": "2026",
+                "smtDivcd": "1R",
+                "sbjtnb": "COSE101",
+                "dvcno": "01",
+                "subjtNm": "컴퓨터프로그래밍",
+                "cmpsjDivNm": "전공필수",
+                "cdt": 3,
+                "gradeGrdDivcd": "A+",
+                "cmpsjGp": 4.5,
+                "ratlcSyySmtNm": None,
+            }
+        ]
+        summary = [
+            {
+                "gpa": 4.2,
+                "aplyCdt": 18,
+                "tgp": 54.0,
+                "covsnSco": 98.0,
+                "cmpsjCdt": 15,
+            }
+        ]
+        return rows, summary
 
-    monkeypatch.setattr(server_module, "_get_session", fake_get_session)
-    monkeypatch.setattr(server_module, "fetch_all_grades", fake_fetch_all_grades)
+    monkeypatch.setattr(server_module, "_get_ams_session", fake_get_ams_session)
+    monkeypatch.setattr(server_module.ams, "fetch_grades", fake_fetch_grades)
 
     structured = _assert_text_block_matches_structured_output(
-        _call_tool("kupid_get_all_grades", {"year_term": "20242R"})
+        _call_tool("kupid_get_all_grades", {})
     )
 
     assert structured["success"] is True
-    assert structured["year_term"] == "20242R"
-    assert structured["record_count"] == 1
-    assert structured["summary_count"] == 1
-    assert structured["available_year_terms"] == [
-        {"value": "20242R", "label": "2024학년도 2학기"}
-    ]
-    assert structured["latest_summary"]["overall_gpa"] == "4.10"
-    assert structured["records"][0]["course_code"] == "COSE101"
+    assert structured["count"] == 1
+    grade = structured["grades"][0]
+    assert grade["course_code"] == "COSE101"
+    assert grade["grade"] == "A+"
+    assert grade["grade_point"] == 4.5
+    assert structured["summary"]["gpa"] == 4.2
+    assert structured["summary"]["earned_credits"] == 18
