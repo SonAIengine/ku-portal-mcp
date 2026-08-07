@@ -3,6 +3,49 @@
 이 프로젝트의 주요 변경사항을 기록합니다.
 [Keep a Changelog](https://keepachangelog.com/ko/1.1.0/) 형식을 따르며 [Semantic Versioning](https://semver.org/lang/ko/)을 사용합니다.
 
+## [0.14.0] - 2026-08-07
+
+차세대 포털 대응 2단계. **포털 로그인을 복구**하고 공지·장학 본문/첨부 조회를 되살렸습니다.
+
+### 추가
+- `ku_portal_mcp/sso.py` — 고려대 통합 로그인(`sso.korea.ac.kr`) 클라이언트.
+  새 로그인 폼이 비밀번호를 AES-128-CBC로 암호화해 보내는 것을 그대로 재현한다
+  (`base64(AES-CBC(key, iv, "<pw>|<salt>")) + "|" + base64(iv)`).
+  CryptoJS 레퍼런스 구현과 ASCII/한글/경계길이 3개 케이스에서 바이트 단위 일치를 검증했다.
+  salt와 `l_token`은 로그인 페이지마다 서버가 새로 발급하므로 매번 파싱한다.
+- `sso.follow_auto_forms` — SSO 구간이 302가 아니라 자동 제출 폼과 JS `location` 이동으로
+  이어져 `follow_redirects`만으로는 흐름이 끊긴다. 폼 체인과 JS 이동을 함께 추적한다.
+- `portal_api.fetch_post_detail` / `parse_post_detail` — 게시글 본문·첨부 파싱.
+
+### 변경
+- **`auth.py` 전면 재작성** — 레거시 `.kpd` 로그인 + GRW 세션 → SSO 기반으로 전환.
+  SSO 로그인만으로는 포털 앱 세션이 서지 않아
+  `index.jsp` → `sso_loginuser.jsp` → `POST /proc/Login.eps` 체인까지 완주하고
+  학생 포털(`/p/ST/`) 도달을 확인해야 세션으로 인정한다.
+- `Session` — `ssotoken`/`PORTAL_SESSIONID`/`GRW_SESSIONID` → 쿠키 전체 보관.
+  포털과 SSO가 같은 이름(`JSESSIONID`)의 다른 쿠키를 쓰므로 도메인·경로까지 저장한다.
+- **`kupid_get_notice_detail` / `kupid_get_scholarship_detail` — 로그인 시 본문 전문과
+  첨부파일(파일명/크기/다운로드 URL)을 반환.** 로그인이 안 되면 기존 요약으로 폴백한다.
+- 본문 텍스트화 — 포털 본문은 `<span>2</span>차` 처럼 인라인으로 잘게 쪼개져 있어
+  구분자를 넣은 `get_text`는 단어 중간을 끊는다. 블록 요소와 `<br>`에서만 줄을 나눈다.
+
+### 제거
+- `ku_portal_mcp/scraper.py` — GRW(`grw.korea.ac.kr`) 전용이며 서비스가 종료됐고 참조도 없다.
+
+### 확인된 학교 시스템 변경
+- 통합 로그인이 `ksso.korea.ac.kr`(`*.do`) → `sso.korea.ac.kr`(`*.eps`)로 이전.
+- LMS IdP 진입점이 `/exsignon/` → `/exsignon_new/sso/sso_idp_login.php`로 변경.
+- LMS가 Canvas(`mylms`)에서 `lms.korea.ac.kr`(Laravel) 체계로 이전 중. Canvas API는 401/404.
+- 학사 기능이 `infodepot` → `ams.korea.ac.kr`로 이전.
+  포털 메뉴 API(`/sp/main/allMenu/list`)에서 메뉴 코드를 확인했다 —
+  수강신청조회 `M111422`, 시간표조회 `M111423`, 전체성적조회 `M112493`, 강의실안내 `M112596`.
+- 이 계정 기준으로 2차 보안인증(OTP/푸시)은 로그인 시 요구되지 않았다.
+
+### 알려진 이슈
+- LMS 14개와 수강·성적·시간표 6개는 여전히 동작하지 않는다. 학교가 백엔드를 교체해
+  호스트 치환이 아니라 API 재작성이 필요하다.
+- 무인증 게시판 조회는 최신 500건까지만 가능하다(암호화된 `encQS` 페이징이 세션에 묶여 있음).
+
 ## [0.13.0] - 2026-08-07
 
 2026년 고려대 **차세대 포털 전환** 대응 1단계. 레거시 백엔드가 서비스를 종료하면서
