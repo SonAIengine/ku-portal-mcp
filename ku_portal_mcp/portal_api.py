@@ -96,6 +96,22 @@ class ScheduleEntry:
     event: str
 
 
+@dataclass
+class PostDetail:
+    """게시글 본문. 포털 로그인이 있어야 조회할 수 있다."""
+
+    title: str
+    date: str
+    writer: str
+    department: str
+    approver: str
+    views: int
+    content: str
+    content_html: str
+    attachments: list[dict]
+    url: str
+
+
 def _clean_text(value: str | None) -> str:
     """HTML 태그와 엔티티를 제거하고 공백을 정규화한다."""
     if not value:
@@ -211,6 +227,110 @@ async def search_boards(
                 results.append((board_id, post))
 
     return results
+
+
+def _split_writer(value: str) -> tuple[str, str]:
+    """'권혜정 (차세대정보화추진팀)' -> ('권혜정', '차세대정보화추진팀')"""
+    match = re.match(r"^(.*?)\s*\((.*)\)\s*$", value)
+    if match:
+        return match.group(1).strip(), match.group(2).strip()
+    return value, ""
+
+
+# 본문에서 줄바꿈으로 취급할 블록 요소
+_BLOCK_TAGS = ("p", "div", "li", "tr", "h1", "h2", "h3", "h4", "h5", "blockquote")
+
+
+def _extract_body_text(node) -> str:
+    """본문을 읽기 좋은 텍스트로 변환한다.
+
+    포털 본문은 서식 때문에 `<span>2</span>차` 처럼 인라인 요소로 잘게 쪼개져
+    있어, 구분자를 넣어 get_text하면 단어 중간에 줄바꿈이 생긴다.
+    블록 요소와 <br>에서만 줄을 나눈다.
+    """
+    for br in node.find_all("br"):
+        br.replace_with("\n")
+    for block in node.find_all(_BLOCK_TAGS):
+        block.append("\n")
+
+    text = node.get_text("", strip=False)
+    text = "\n".join(line.strip() for line in text.split("\n"))
+    return re.sub(r"\n{3,}", "\n\n", text).strip()
+
+
+def parse_post_detail(html: str, url: str) -> PostDetail:
+    """게시글 상세 페이지를 파싱한다."""
+    soup = BeautifulSoup(html, "lxml")
+
+    area = soup.select_one(".sub_search_area.view")
+    if not area:
+        raise RuntimeError(
+            "게시글 본문 영역을 찾지 못했습니다. 로그인이 만료되었거나 "
+            "포털 화면 구조가 변경되었을 수 있습니다."
+        )
+
+    title_tag = area.select_one(".tit h3") or area.select_one(".tit")
+    title = title_tag.get_text(" ", strip=True) if title_tag else ""
+
+    # 작성자/작성일/승인자/조회수는 dt(레이블) + dd(값) 쌍으로 들어 있다.
+    meta: dict[str, str] = {}
+    for dl in area.select("dl"):
+        label = dl.find("dt")
+        value = dl.find("dd")
+        if label and value:
+            meta[label.get_text(strip=True)] = value.get_text(" ", strip=True)
+
+    # 전체 레이아웃 페이지는 '작성자 (부서)', 팝업 페이지는 '부서'만 제공한다.
+    writer, department = _split_writer(meta.get("작성자", ""))
+    if not department:
+        department = meta.get("부서", "")
+    approver, _ = _split_writer(meta.get("승인자", ""))
+    views = int(re.sub(r"\D", "", meta.get("조회수", "")) or 0)
+
+    body = area.select_one(".bc-s-post-ctnt-area") or area.select_one(".text_area")
+    content_html = str(body) if body else ""
+    content = _extract_body_text(body) if body else ""
+
+    attachments = []
+    for link in soup.select("#tx_attach_list a[href], .tx-attach-list a[href]"):
+        size_tag = link.find("span")
+        # '(28KB KB / 다운로드)' 형태에서 크기만 남긴다.
+        size = size_tag.get_text(strip=True).strip("()") if size_tag else ""
+        size = re.sub(r"\s*KB\s*KB\b", "KB", size.split("/")[0]).strip()
+        if size_tag:
+            size_tag.extract()
+        href = link["href"]
+        attachments.append(
+            {
+                "name": link.get_text(" ", strip=True),
+                "size": size,
+                "url": f"{PORTAL_BASE}{href}" if href.startswith("/") else href,
+            }
+        )
+
+    return PostDetail(
+        title=title,
+        date=meta.get("작성일", ""),
+        writer=writer,
+        department=department,
+        approver=approver,
+        views=views,
+        content=content,
+        content_html=content_html,
+        attachments=attachments,
+        url=url,
+    )
+
+
+async def fetch_post_detail(client: httpx.AsyncClient, url: str) -> PostDetail:
+    """게시글 본문을 조회한다. 인증된 클라이언트가 필요하다."""
+    resp = await client.get(url, headers={"user-agent": _HEADERS["user-agent"]})
+    resp.raise_for_status()
+
+    if "ipt_password" in resp.text:
+        raise RuntimeError("포털 로그인이 필요합니다 (세션이 만료되었습니다).")
+
+    return parse_post_detail(resp.text, url)
 
 
 async def fetch_academic_schedule(

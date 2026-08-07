@@ -52,6 +52,9 @@ _UA = (
 
 _KEY_PATTERN = re.compile(r'CryptoJS\.enc\.Base64\.parse\(\s*"([^"]+)"\s*\)')
 _SALT_PATTERN = re.compile(r'ipt_password"\)\.val\(\)\s*\+\s*"\|([^"]+)"')
+_JS_LOCATION_PATTERN = re.compile(
+    r'window\.location(?:\.href)?\s*=\s*["\']([^"\']+)["\']'
+)
 
 
 @dataclass
@@ -216,26 +219,39 @@ async def follow_auto_forms(
     """`window.onload`로 자동 제출되는 리다이렉트 폼 체인을 따라간다.
 
     SSO 구간은 302가 아니라 hidden 필드를 담은 자동 제출 폼으로 이어지므로
-    httpx의 follow_redirects만으로는 흐름이 끊긴다. 로그인 폼(`loginFrm`)에
-    도달하면 사용자 입력이 필요한 지점이므로 멈춘다.
+    httpx의 follow_redirects만으로는 흐름이 끊긴다. 자격증명 입력이 필요한
+    로그인 폼에 도달하면 멈춘다.
+
+    포털의 세션 확립 폼도 이름이 `loginFrm`이라 이름으로는 구분할 수 없다.
+    비밀번호 필드(`user_password`)를 가진 폼만 로그인 폼으로 판정한다.
     """
     for _ in range(max_hops):
         form = BeautifulSoup(resp.text, "lxml").find("form")
-        if not form or not form.get("action"):
-            break
-        if form.get("name") == "loginFrm":
-            break
 
-        fields = {
-            i["name"]: (i.get("value") or "")
-            for i in form.find_all("input")
-            if i.get("name")
-        }
-        if not fields:
-            break
+        if form and form.get("action"):
+            if form.find("input", {"name": "user_password"}):
+                break
 
-        action = urljoin(str(resp.url), form["action"])
-        resp = await client.post(action, data=fields, headers={"user-agent": _UA})
+            fields = {
+                i["name"]: (i.get("value") or "")
+                for i in form.find_all("input")
+                if i.get("name")
+            }
+            if not fields:
+                break
+
+            action = urljoin(str(resp.url), form["action"])
+            resp = await client.post(action, data=fields, headers={"user-agent": _UA})
+            continue
+
+        # 폼이 없으면 JS location 이동으로 이어지는 구간일 수 있다.
+        js_move = _JS_LOCATION_PATTERN.search(resp.text)
+        if not js_move:
+            break
+        target = urljoin(str(resp.url), js_move.group(1))
+        if target == str(resp.url):
+            break
+        resp = await client.get(target, headers={"user-agent": _UA})
 
     return resp
 

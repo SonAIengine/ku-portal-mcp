@@ -25,7 +25,7 @@ from dotenv import load_dotenv
 from mcp.server.fastmcp import FastMCP
 
 from .academic import resolve_year_semester
-from .auth import login, clear_session, Session
+from .auth import login, clear_session, make_client, Session
 from .portal_api import (
     BoardPost,
     BOARD_NAMES,
@@ -35,6 +35,7 @@ from .portal_api import (
     fetch_academic_schedule,
     fetch_board,
     fetch_board_page,
+    fetch_post_detail,
     search_boards,
 )
 from .library import (
@@ -192,7 +193,10 @@ def _normalize_calendar_semester(semester: str) -> str:
 
 
 async def _board_detail(board_id: int, post_seq: int, label: str) -> dict[str, Any]:
-    """게시글 상세를 반환한다. 본문 전문은 로그인이 필요해 요약만 제공한다."""
+    """게시글 상세를 반환한다.
+
+    포털 로그인이 되면 본문 전문과 첨부파일을, 실패하면 목록의 요약을 반환한다.
+    """
     try:
         post = await _find_post(board_id, post_seq)
         if not post:
@@ -203,17 +207,42 @@ async def _board_detail(board_id: int, post_seq: int, label: str) -> dict[str, A
                     f"찾지 못했습니다. 오래된 글은 무인증 조회 범위를 벗어납니다."
                 ),
             }
+    except Exception as e:
+        logger.error(f"Failed to fetch {label} list: {e}")
+        return {"success": False, "message": f"{label} 조회 실패: {e}"}
+
+    summary = _format_posts([post])[0]
+
+    try:
+        session = await _get_session()
+        async with make_client(session) as client:
+            detail = await fetch_post_detail(client, post.url)
+    except Exception as e:
+        # 로그인 없이도 목록 수준 정보는 돌려준다.
+        logger.warning(f"{label} 본문 조회 실패, 요약으로 대체: {e}")
         return {
             "success": True,
-            "detail": _format_posts([post])[0],
+            "detail": summary,
             "note": (
-                "차세대 포털은 게시글 본문 전문과 첨부파일에 로그인을 요구합니다. "
+                f"본문 전문은 포털 로그인이 필요합니다 ({e}). "
                 "요약(summary)과 원문 링크(url)만 제공됩니다."
             ),
         }
-    except Exception as e:
-        logger.error(f"Failed to fetch {label} detail: {e}")
-        return {"success": False, "message": f"{label} 상세 조회 실패: {e}"}
+
+    return {
+        "success": True,
+        "detail": {
+            **summary,
+            # 팝업 페이지에는 작성자 이름이 없어 목록 값을 유지한다.
+            "title": detail.title or summary["title"],
+            "date": detail.date or summary["date"],
+            "department": detail.department or summary["department"],
+            "approver": detail.approver,
+            "views": detail.views or summary["views"],
+            "content": detail.content,
+            "attachments": detail.attachments,
+        },
+    }
 
 
 # ──────────────────────────────────────────────
