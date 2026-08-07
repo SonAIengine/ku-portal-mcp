@@ -269,8 +269,14 @@ async def follow_auto_forms(
         js_move = _JS_LOCATION_PATTERN.search(resp.text)
         if not js_move:
             break
-        target = urljoin(str(resp.url), js_move.group(1))
-        if target == str(resp.url):
+
+        raw = js_move.group(1).strip()
+        # 빈 값이나 javascript:/about: 같은 비-내비게이션 값은 따라가지 않는다.
+        if not raw or raw.lower().startswith(("javascript:", "about:", "#")):
+            break
+
+        target = urljoin(str(resp.url), raw)
+        if target == str(resp.url) or not target.startswith(("http://", "https://")):
             break
         resp = await client.get(target, headers={"user-agent": _UA})
 

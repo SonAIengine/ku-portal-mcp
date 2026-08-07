@@ -24,6 +24,7 @@ import httpx
 from dotenv import load_dotenv
 from mcp.server.fastmcp import FastMCP
 
+from . import ams
 from .academic import resolve_year_semester
 from .auth import login, clear_session, make_client, Session
 from .portal_api import (
@@ -243,6 +244,73 @@ async def _board_detail(board_id: int, post_seq: int, label: str) -> dict[str, A
             "attachments": detail.attachments,
         },
     }
+
+
+async def _get_ams_session() -> ams.AmsSession:
+    """AMS 세션을 가져온다. 없으면 2차 인증이 필요하다고 알린다."""
+    session = ams.load_session()
+    if session and session.is_valid:
+        return session
+    raise RuntimeError(
+        "AMS(학사) 2차 보안인증이 필요합니다. "
+        "kupid_ams_auth_start()로 인증 코드를 받은 뒤 "
+        "kupid_ams_auth_verify(code)로 인증을 완료하세요."
+    )
+
+
+# ──────────────────────────────────────────────
+# 학사 시스템(AMS) 2차 인증
+# ──────────────────────────────────────────────
+
+
+@server.tool()
+async def kupid_ams_auth_start() -> dict[str, Any]:
+    """학사 시스템(AMS) 2차 보안인증을 시작해 이메일로 인증 코드를 보냅니다.
+
+    수강신청내역·시간표·성적 조회는 학교 정책상 2차 보안인증이 필요합니다.
+    이 tool을 호출하면 등록된 메일로 6자리 코드가 발송되며(5분 유효),
+    kupid_ams_auth_verify(code)로 인증을 마치면 약 50분간 세션이 유지됩니다.
+    """
+    try:
+        session = ams.load_session()
+        if session and session.is_valid and await ams.verify_session(session):
+            return {
+                "success": True,
+                "already_authenticated": True,
+                "message": "이미 인증된 세션이 있습니다. 바로 조회할 수 있습니다.",
+            }
+
+        masked_email = await ams.start_login()
+        return {
+            "success": True,
+            "already_authenticated": False,
+            "masked_email": masked_email,
+            "message": (
+                f"{masked_email or '등록된 메일'}로 6자리 인증 코드를 보냈습니다. "
+                "5분 안에 kupid_ams_auth_verify(code)로 입력하세요."
+            ),
+        }
+    except Exception as e:
+        logger.error(f"AMS auth start failed: {e}")
+        return {"success": False, "message": f"AMS 인증 시작 실패: {e}"}
+
+
+@server.tool()
+async def kupid_ams_auth_verify(code: str) -> dict[str, Any]:
+    """이메일로 받은 6자리 코드로 학사 시스템(AMS) 인증을 완료합니다.
+
+    Args:
+        code: 메일로 받은 6자리 인증 코드
+    """
+    try:
+        await ams.complete_login(code)
+        return {
+            "success": True,
+            "message": "AMS 인증 완료. 수강신청내역·시간표·성적을 조회할 수 있습니다.",
+        }
+    except Exception as e:
+        logger.error(f"AMS auth verify failed: {e}")
+        return {"success": False, "message": f"AMS 인증 실패: {e}"}
 
 
 # ──────────────────────────────────────────────
