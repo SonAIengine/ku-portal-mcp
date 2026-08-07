@@ -52,8 +52,9 @@ _UA = (
 
 _KEY_PATTERN = re.compile(r'CryptoJS\.enc\.Base64\.parse\(\s*"([^"]+)"\s*\)')
 _SALT_PATTERN = re.compile(r'ipt_password"\)\.val\(\)\s*\+\s*"\|([^"]+)"')
+# `window.location = "..."` 와 `location.href = "..."` 를 모두 잡는다.
 _JS_LOCATION_PATTERN = re.compile(
-    r'window\.location(?:\.href)?\s*=\s*["\']([^"\']+)["\']'
+    r'(?:window\.)?location(?:\.href)?\s*=\s*["\']([^"\']+)["\']'
 )
 _SUBMIT_CALL_PATTERN = re.compile(r"\.submit\s*\(\s*\)")
 

@@ -3,6 +3,42 @@
 이 프로젝트의 주요 변경사항을 기록합니다.
 [Keep a Changelog](https://keepachangelog.com/ko/1.1.0/) 형식을 따르며 [Semantic Versioning](https://semver.org/lang/ko/)을 사용합니다.
 
+## [0.15.0] - 2026-08-07
+
+차세대 포털 대응 3단계. **LMS 14개 tool을 전부 복구**했습니다. 30개 중 24개가 동작합니다.
+
+### 변경
+- **`lms.py` 로그인 전면 교체** — 폐지된 KSSO 흐름(`_ksso_login`/`_follow_saml_redirects`)을
+  제거하고 통합 SSO 기반 `_sso_login`으로 대체.
+  Canvas API는 죽지 않았고 세션이 붙지 않았을 뿐이었다.
+  - **mylms에서 시작해야 한다.** 로그인 방식 선택 페이지(`xn-sso/login.php`)가
+    `cvs_lgn=true` 컨텍스트를 담은 IdP 링크를 주고, 그 컨텍스트로 로그인해야
+    Canvas 인계 페이지(`learningx/login/from_cc`)로 이어진다.
+    포털용 IdP로 로그인하면 LMS 세션만 생기고 Canvas는 401로 남는다.
+  - `_canvas_login`에 `authenticity_token` 추가. Canvas(Rails)가 `_csrf_token` 쿠키를
+    되돌려받길 요구해 빠뜨리면 400이 난다.
+- `sso.follow_auto_forms` — **자동 제출 폼만** 따라가도록 수정.
+  이전에는 첫 번째 폼을 무조건 제출해 도착 페이지의 로그아웃 폼까지 눌러
+  로그인 직후 로그아웃되는 문제가 있었다. 이제 `.submit()` 호출이 있고
+  hidden 입력만 가진 폼으로 한정한다.
+- `sso` JS location 패턴 — `location.href = "..."`(window 접두어 없음)도 인식.
+
+### 확인된 제약 — 수강·성적·시간표 6개
+학사 기능이 `infodepot` → `ams.korea.ac.kr`로 이전되면서 **2차 보안인증이 필수**가 되었다.
+브라우저로 확인한 결과 이 계정은 모바일 인증 미등록 상태라 로그인 화면에서 막힌다.
+
+    POST sso.korea.ac.kr/korea/auth/IOPUserStatusChk.eps  (user_id=..., command=auth)
+    → {"returnCode":"1401","returnMessage":"No registered user found.
+        Please proceed with mobile authentication registration."}
+
+대안으로 이메일 OTP 경로가 있으며 엔드포인트는 파악해 두었다
+(`IOPOtpReq.eps` 발송 → `IOPOtpVerify.eps` 검증(`cert_no` 6자리, 5분 유효) → 로그인 폼 재제출).
+다만 사용자가 메일에서 코드를 읽어 입력해야 하므로 완전 자동화는 불가능하다.
+
+### 알려진 이슈
+- 수강신청내역·성적·시간표·개설과목·강의계획서·강의실시간표 6개는 위 2차 인증 때문에
+  동작하지 않는다. AMS도 SPA라 로그인 이후 API 재작성이 추가로 필요하다.
+
 ## [0.14.0] - 2026-08-07
 
 차세대 포털 대응 2단계. **포털 로그인을 복구**하고 공지·장학 본문/첨부 조회를 되살렸습니다.

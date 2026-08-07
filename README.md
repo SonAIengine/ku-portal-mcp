@@ -35,9 +35,14 @@
 - `infodepot` / `grw` / `ksso` 도메인 서비스 종료 → 로그인이 필요한 tool 다수가 동작 불가
 - 학사 기능이 `infodepot` → `ams.korea.ac.kr`로, LMS가 Canvas → `lms.korea.ac.kr` 체계로 이전
 
-**복구 완료**: 공지·학사일정·장학·검색·도서관·학과공지(무인증) + **포털 로그인 및 공지/장학 본문·첨부 조회**
+**복구 완료 (30개 중 24개)**
+- 공지·학사일정·장학·검색·도서관·학과공지 — 무인증으로 동작
+- 포털 로그인, 공지/장학 **본문 전문 + 첨부파일**
+- **LMS 14개 전부** — 통합 SSO 기반으로 Canvas 로그인 복구
 
-**복구 진행 중**: LMS 14개, 수강·성적·시간표 6개 — 학교가 시스템을 교체해 API 재작성이 필요합니다.
+**미복구 (6개)**: 수강신청내역·성적·시간표·개설과목·강의계획서·강의실시간표.
+학사 기능이 `ams.korea.ac.kr`로 이전되면서 **2차 보안인증(모바일 인증 또는 이메일 OTP)이 필수**가 되었습니다.
+계정에 모바일 인증이 등록돼 있지 않으면 로그인 자체가 막힙니다.
 
 ## 이런 걸 할 수 있어요
 
@@ -212,28 +217,28 @@ KUPID의 **전체성적조회** 화면에서 최종 확정 성적과 누계 성�
 | 12 | `kupid_my_courses` | 내 수강신청 내역 (학수번호/시간/강의실) | SSO ⚠️ |
 | 13 | `kupid_room_schedule` | 건물/호실의 정규 수업 시간표 (학부+대학원 통합) | SSO ⚠️ |
 | 14 | `kupid_get_all_grades` | 전체 성적 / 누적 GPA / 취득학점 조회 | SSO ⚠️ |
-| 15 | `kupid_lms_courses` | LMS 수강과목 목록 | KSSO ⚠️ |
-| 16 | `kupid_lms_assignments` | LMS 과제 목록 (과목별) | KSSO ⚠️ |
-| 17 | `kupid_lms_modules` | LMS 강의자료 (주차별 모듈) | KSSO ⚠️ |
-| 18 | `kupid_lms_todo` | LMS 할 일 / 다가오는 이벤트 | KSSO ⚠️ |
-| 19 | `kupid_lms_dashboard` | LMS 대시보드 + 공지사항 | KSSO ⚠️ |
-| 20 | `kupid_lms_grades` | LMS 성적/점수 조회 | KSSO ⚠️ |
-| 21 | `kupid_lms_submissions` | LMS 과제 제출 현황 | KSSO ⚠️ |
-| 22 | `kupid_lms_quizzes` | LMS 퀴즈/시험 목록 | KSSO ⚠️ |
-| 23 | `kupid_lms_download_file` | LMS 강의자료 파일 다운로드 (PDF 등) | KSSO ⚠️ |
-| 24 | `kupid_lms_list_boards` | LMS 과목 게시판 목록 (Q&A, 강의자료실 등) | KSSO ⚠️ |
-| 25 | `kupid_lms_list_board_posts` | 게시판 게시글 목록 | KSSO ⚠️ |
-| 26 | `kupid_lms_get_board_post` | 게시글 상세 + 첨부파일 + **댓글(첨부 포함)** | KSSO ⚠️ |
-| 27 | `kupid_lms_announcements` | LMS 공지 전문 조회 (과목별 또는 전체, 본문 비절단) | KSSO ⚠️ |
-| 28 | `kupid_lms_syllabus` | LMS 강의계획서 조회 | KSSO ⚠️ |
+| 15 | `kupid_lms_courses` | LMS 수강과목 목록 | SSO |
+| 16 | `kupid_lms_assignments` | LMS 과제 목록 (과목별) | SSO |
+| 17 | `kupid_lms_modules` | LMS 강의자료 (주차별 모듈) | SSO |
+| 18 | `kupid_lms_todo` | LMS 할 일 / 다가오는 이벤트 | SSO |
+| 19 | `kupid_lms_dashboard` | LMS 대시보드 + 공지사항 | SSO |
+| 20 | `kupid_lms_grades` | LMS 성적/점수 조회 | SSO |
+| 21 | `kupid_lms_submissions` | LMS 과제 제출 현황 | SSO |
+| 22 | `kupid_lms_quizzes` | LMS 퀴즈/시험 목록 | SSO |
+| 23 | `kupid_lms_download_file` | LMS 강의자료 파일 다운로드 (PDF 등) | SSO |
+| 24 | `kupid_lms_list_boards` | LMS 과목 게시판 목록 (Q&A, 강의자료실 등) | SSO |
+| 25 | `kupid_lms_list_board_posts` | 게시판 게시글 목록 | SSO |
+| 26 | `kupid_lms_get_board_post` | 게시글 상세 + 첨부파일 + **댓글(첨부 포함)** | SSO |
+| 27 | `kupid_lms_announcements` | LMS 공지 전문 조회 (과목별 또는 전체, 본문 비절단) | SSO |
+| 28 | `kupid_lms_syllabus` | LMS 강의계획서 조회 | SSO |
 | 29 | `kupid_dept_notices` | 학과/대학원 홈페이지 공지 목록 | **불필요** |
 | 30 | `kupid_dept_notice_detail` | 학과/대학원 공지 상세 | **불필요** |
 
-> **인증 안내**: SSO = KUPID 포털 인증, KSSO = 고려대 통합 SSO (Canvas LMS용). 모두 같은 ID/PW를 사용하며, 환경변수만 설정하면 자동으로 로그인됩니다.
+> **인증 안내**: SSO = 고려대 통합 로그인(`sso.korea.ac.kr`). 포털과 LMS 모두 같은 ID/PW를 사용하며, 환경변수만 설정하면 자동으로 로그인됩니다.
 >
 > **선택** = 로그인 없이도 동작하지만, 로그인하면 더 많은 정보를 반환합니다.
 >
-> ⚠️ 표시된 tool은 **2026년 차세대 포털 전환으로 현재 동작하지 않습니다.** 아래 "차세대 포털 전환 안내"를 참고하세요.
+> ⚠️ 표시된 6개(수강·성적·시간표)는 학사 시스템(`ams.korea.ac.kr`)이 **2차 보안인증을 필수화**해 현재 동작하지 않습니다. 아래 "차세대 포털 전환 안내"를 참고하세요.
 
 ## 설치
 
