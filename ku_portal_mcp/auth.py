@@ -1,19 +1,28 @@
-"""KUPID portal authentication module.
+"""차세대 KUPID 포털 인증.
 
-Handles login flow, SSO token acquisition, and session caching.
-Based on the kukit library (https://github.com/DevKor-github/kukit).
+2026년 전환으로 레거시 로그인(`/common/Login.kpd` + GRW 세션)이 폐지되어
+`sso.korea.ac.kr` 통합 로그인으로 대체되었다.
+
+포털 앱 세션은 SSO 로그인만으로는 확립되지 않고, 아래 체인을 더 거쳐야 한다.
+
+    /exsignon/sso/sso_index.jsp   → SSO 로그인 (ssosession, at 발급)
+    → /index.jsp                  → JS location 이동
+    → /exsignon/sso/sso_loginuser.jsp → 자동 제출 폼
+    → POST /proc/Login.eps        → 포털 세션(_st) 확립, /p/ST/ 도달
+
+세션은 쿠키 전체를 캐시해 재사용한다.
 """
 
 import json
-import os
-import re
-import time
 import logging
-from dataclasses import dataclass, asdict
+import os
+import time
+from dataclasses import dataclass, asdict, field
 from pathlib import Path
 
 import httpx
 
+from . import sso
 from ._storage import write_secure_json as _write_secure_json
 
 logger = logging.getLogger(__name__)
@@ -23,18 +32,12 @@ SESSION_FILE = CACHE_DIR / "session.json"
 SESSION_TTL = 30 * 60  # 30 minutes
 
 PORTAL_BASE = "https://portal.korea.ac.kr"
-GRW_BASE = "https://grw.korea.ac.kr"
-INFODEPOT_BASE = "https://infodepot.korea.ac.kr"
-LIBRSV_BASE = "https://librsv.korea.ac.kr"
+PORTAL_IDP_URL = f"{PORTAL_BASE}/exsignon/sso/sso_index.jsp"
+PORTAL_INDEX_URL = f"{PORTAL_BASE}/index.jsp"
 
-INTRO_URL = f"{PORTAL_BASE}/front/Intro.kpd"
-LOGIN_URL = f"{PORTAL_BASE}/common/Login.kpd"
+# 포털 앱 세션이 확립되면 학생 포털(/p/ST/)로 이동한다.
+_AUTHENTICATED_PATH = "/p/"
 
-# Delimiters to extract dynamic form fields from login page
-FIRST_DELIMITER = '<input type="password" name="pw" id="_pw" value="" />'
-SECOND_DELIMITER = '<input type="hidden" name="direct_div"/>'
-
-# Browser-like headers required for KUPID portal
 _BROWSER_HEADERS = {
     "user-agent": (
         "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
@@ -46,18 +49,22 @@ _BROWSER_HEADERS = {
 
 @dataclass
 class Session:
-    ssotoken: str
-    portal_session_id: str
-    grw_session_id: str
-    created_at: float
+    """포털 인증 세션.
+
+    포털과 SSO가 같은 이름(JSESSIONID)의 서로 다른 쿠키를 쓰므로
+    이름만으로는 구분할 수 없다. 도메인·경로까지 보존한다.
+    """
+
+    cookies: list[dict[str, str]] = field(default_factory=list)
+    created_at: float = 0.0
 
     @property
     def is_valid(self) -> bool:
-        return (time.time() - self.created_at) < SESSION_TTL
+        return bool(self.cookies) and (time.time() - self.created_at) < SESSION_TTL
 
     @property
     def should_refresh(self) -> bool:
-        """True if session is near expiry (within last 20% of TTL)."""
+        """만료가 가까우면(TTL의 마지막 20%) True."""
         elapsed = time.time() - self.created_at
         return elapsed > (SESSION_TTL * 0.8)
 
@@ -67,7 +74,9 @@ def load_cached_session() -> Session | None:
         return None
     try:
         data = json.loads(SESSION_FILE.read_text())
-        session = Session(**data)
+        session = Session(
+            cookies=data.get("cookies") or [], created_at=data.get("created_at", 0.0)
+        )
         if session.is_valid:
             return session
         logger.info("Cached session expired")
@@ -80,168 +89,60 @@ def save_session(session: Session) -> None:
     _write_secure_json(SESSION_FILE, asdict(session))
 
 
-def _extract_cookie(response: httpx.Response, name: str) -> str | None:
-    for key, value in response.headers.multi_items():
-        if key.lower() == "set-cookie" and value.startswith(f"{name}="):
-            cookie_val = value.split(";")[0].split("=", 1)[1]
-            return cookie_val
-    return None
+def _dump_cookies(client: httpx.AsyncClient) -> list[dict[str, str]]:
+    """클라이언트의 쿠키를 도메인·경로와 함께 직렬화한다."""
+    return [
+        {
+            "name": c.name,
+            "value": c.value or "",
+            "domain": c.domain,
+            "path": c.path,
+        }
+        for c in client.cookies.jar
+    ]
 
 
-async def _get_login_fields(client: httpx.AsyncClient) -> dict:
-    """Fetch login page and extract dynamic form field names + CSRF token."""
-    resp = await client.get(
-        INTRO_URL,
-        headers={**_BROWSER_HEADERS, "referer": f"{PORTAL_BASE}/"},
-    )
-    resp.raise_for_status()
-    text = resp.text
-
-    # PORTAL_SESSIONID is now in client.cookies (auto-managed)
-    portal_session_id = str(client.cookies.get("PORTAL_SESSIONID", ""))
-    if not portal_session_id:
-        raise RuntimeError("Failed to get PORTAL_SESSIONID cookie")
-
-    # Split HTML to find dynamic fields between the two delimiters
-    parts = text.split(FIRST_DELIMITER)
-    if len(parts) < 2:
-        raise RuntimeError("Failed to find first delimiter in login page")
-    after_pw = parts[1]
-
-    parts2 = after_pw.split(SECOND_DELIMITER)
-    if len(parts2) < 2:
-        raise RuntimeError("Failed to find second delimiter in login page")
-    between = parts2[0]
-
-    # Extract the 4 dynamic hidden fields
-    lines = [line.strip() for line in between.split("\n") if line.strip()]
-    if len(lines) != 4:
-        raise RuntimeError(f"Expected 4 dynamic fields, got {len(lines)}: {lines}")
-
-    id_elem, pw_elem, csrf_elem, fake_elem = lines
-
-    id_key = re.search(r'name="(\w+)"', id_elem)
-    pw_key = re.search(r'name="(\w+)"', pw_elem)
-    csrf_val = re.search(r'value="(.+)"', csrf_elem)
-    fake_val = re.search(r'value="(\w+)"', fake_elem)
-
-    if not all([id_key, pw_key, csrf_val, fake_val]):
-        raise RuntimeError("Failed to parse dynamic form fields")
-
-    fake_key_match = re.search(r'name="(\w+)"', fake_elem)
-    if not fake_key_match:
-        raise RuntimeError("Failed to parse fake field name")
-
-    return {
-        "id_key": id_key.group(1),  # type: ignore[union-attr]
-        "pw_key": pw_key.group(1),  # type: ignore[union-attr]
-        "csrf": csrf_val.group(1),  # type: ignore[union-attr]
-        "fake_key": fake_key_match.group(1),
-        "fake_val": fake_val.group(1),  # type: ignore[union-attr]
-        "portal_session_id": portal_session_id,
-    }
+def make_client(session: Session | None = None, **kwargs) -> httpx.AsyncClient:
+    """세션 쿠키가 적용된 httpx 클라이언트를 만든다."""
+    kwargs.setdefault("timeout", 30.0)
+    kwargs.setdefault("follow_redirects", True)
+    client = httpx.AsyncClient(**kwargs)
+    for cookie in session.cookies if session else []:
+        client.cookies.set(
+            cookie["name"],
+            cookie["value"],
+            domain=cookie.get("domain", ""),
+            path=cookie.get("path", "/"),
+        )
+    return client
 
 
-async def _do_login(
-    client: httpx.AsyncClient, user_id: str, password: str, fields: dict
-) -> str:
-    """Submit login form and extract ssotoken.
-
-    Uses httpx auto cookie management — cookies from the GET login page
-    (WMONID, PORTAL_SESSIONID) are automatically sent with the POST.
-    """
-    form_data = {
-        fields["id_key"]: user_id,
-        fields["pw_key"]: password,
-        "_csrf": fields["csrf"],
-        fields["fake_key"]: fields["fake_val"],
-        "direct_div": "",
-        "pw_pass": "",
-        "browser": "chrome",
-    }
-
-    resp = await client.post(
-        LOGIN_URL,
-        data=form_data,
-        headers={
-            **_BROWSER_HEADERS,
-            "referer": INTRO_URL,
-            "origin": PORTAL_BASE,
-            "content-type": "application/x-www-form-urlencoded",
-        },
-        follow_redirects=False,
-    )
-
-    if resp.status_code != 302:
-        raise RuntimeError(f"Login failed with status {resp.status_code}")
-
-    ssotoken = str(client.cookies.get("ssotoken", ""))
-    if not ssotoken:
-        ssotoken = _extract_cookie(resp, "ssotoken") or ""
-    if not ssotoken:
-        raise RuntimeError("Failed to extract ssotoken from login response")
-
-    return ssotoken
-
-
-async def _get_grw_session(
-    client: httpx.AsyncClient, token: str, portal_session_id: str
-) -> str:
-    """Access GRW to obtain GRW_SESSIONID.
-
-    GRW is a separate domain, so we must manually set cookies
-    (httpx auto cookies are per-domain).
-    """
-    url = (
-        f"{GRW_BASE}/GroupWare/user/NoticeList.jsp"
-        f"?kind=11&compId=148&menuCd=340&language=ko"
-        f"&frame=&token={token}&orgtoken={token}"
-    )
-    cookie_str = f"ssotoken={token}; PORTAL_SESSIONID={portal_session_id};"
-
-    resp = await client.get(
-        url,
-        headers={
-            "referer": f"{PORTAL_BASE}/",
-            "cookie": cookie_str,
-        },
-    )
-    resp.raise_for_status()
-
-    grw_session_id = _extract_cookie(resp, "GRW_SESSIONID")
-    if not grw_session_id:
-        raise RuntimeError("Failed to get GRW_SESSIONID")
-
-    return grw_session_id
+async def _establish_portal_session(client: httpx.AsyncClient) -> httpx.Response:
+    """SSO 로그인 후 포털 앱 세션을 확립한다."""
+    resp = await client.get(PORTAL_INDEX_URL, headers=_BROWSER_HEADERS)
+    return await sso.follow_auto_forms(client, resp)
 
 
 async def verify_session(session: Session) -> bool:
-    """Verify that a KUPID session is still valid on the server side."""
+    """포털 세션이 서버에서 아직 유효한지 확인한다."""
     try:
-        cookie = f"ssotoken={session.ssotoken}; PORTAL_SESSIONID={session.portal_session_id};"
-        async with httpx.AsyncClient(timeout=10.0) as client:
-            resp = await client.get(
-                f"{PORTAL_BASE}/front/Main.kpd",
-                headers={**_BROWSER_HEADERS, "cookie": cookie},
-                follow_redirects=False,
+        async with make_client(session, timeout=15.0) as client:
+            resp = await client.get(PORTAL_INDEX_URL, headers=_BROWSER_HEADERS)
+            resp = await sso.follow_auto_forms(client, resp)
+            return (
+                _AUTHENTICATED_PATH in str(resp.url) and "ipt_password" not in resp.text
             )
-            # If session is valid, we get 200. If expired, we get 302 to login.
-            return resp.status_code == 200
     except Exception:
         return False
 
 
 async def login() -> Session:
-    """Full login flow: credentials -> ssotoken -> GRW session.
-
-    Uses cached session if still valid. Credentials from environment variables.
-    """
+    """SSO 로그인 → 포털 앱 세션 확립. 유효한 캐시가 있으면 재사용한다."""
     cached = load_cached_session()
     if cached:
         if not cached.should_refresh:
             logger.info("Using cached session")
             return cached
-        # Near expiry — verify server-side before reusing
         if await verify_session(cached):
             logger.info("KUPID session near expiry but still valid on server, reusing")
             return cached
@@ -255,25 +156,25 @@ async def login() -> Session:
             "~/.claude/settings.json의 mcpServers.ku-portal.env를 확인하세요."
         )
 
-    async with httpx.AsyncClient(timeout=30.0) as client:
-        fields = await _get_login_fields(client)
-        ssotoken = await _do_login(client, user_id, password, fields)
-        grw_session_id = await _get_grw_session(
-            client, ssotoken, fields["portal_session_id"]
-        )
+    async with make_client() as client:
+        await sso.login_to_service(client, PORTAL_IDP_URL, user_id, password)
+        resp = await _establish_portal_session(client)
 
-    session = Session(
-        ssotoken=ssotoken,
-        portal_session_id=fields["portal_session_id"],
-        grw_session_id=grw_session_id,
-        created_at=time.time(),
-    )
+        if _AUTHENTICATED_PATH not in str(resp.url):
+            raise RuntimeError(
+                f"포털 세션 확립에 실패했습니다 (최종 위치: {resp.url}). "
+                "포털 로그인 절차가 변경되었을 수 있습니다."
+            )
+
+        cookies = _dump_cookies(client)
+
+    session = Session(cookies=cookies, created_at=time.time())
     save_session(session)
     logger.info("Login successful, session cached")
     return session
 
 
 def clear_session() -> None:
-    """Remove cached session to force re-login."""
+    """캐시된 세션을 삭제해 다음 호출에서 다시 로그인하게 한다."""
     if SESSION_FILE.exists():
         SESSION_FILE.unlink()

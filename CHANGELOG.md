@@ -3,6 +3,211 @@
 이 프로젝트의 주요 변경사항을 기록합니다.
 [Keep a Changelog](https://keepachangelog.com/ko/1.1.0/) 형식을 따르며 [Semantic Versioning](https://semver.org/lang/ko/)을 사용합니다.
 
+> ## 2026 차세대 포털 전환 대응 (v0.13.0 → v0.17.0)
+>
+> 고려대학교가 2026년 포털·학사·LMS를 차세대 시스템으로 교체하면서
+> **기존 tool 31개 중 28개가 동작을 멈췄습니다.** 아래 다섯 번의 릴리스에 걸쳐 전부 복구했습니다.
+>
+> **왜 멈췄나** — 단순한 URL 변경이 아니라 백엔드가 교체되었습니다.
+> `infodepot` · `grw` · `ksso` 세 도메인은 서비스가 종료되어 TLS 협상조차 되지 않고,
+> 레거시 포털 경로(`*.kpd`)는 전부 `301`로 폐지되었습니다.
+> 통합 로그인은 `ksso`(`*.do`) → `sso.korea.ac.kr`(`*.eps`)로 옮겨가며
+> 비밀번호를 AES-128-CBC로 암호화해 보내는 방식으로 바뀌었고,
+> 학사 기능은 `ams.korea.ac.kr`로 이전되며 2차 보안인증이 필수가 되었습니다.
+>
+> **어떻게 고쳤나**
+>
+> | 릴리스 | 내용 |
+> |---|---|
+> | v0.13.0 | 공지·학사일정·장학·검색을 포털 공개 JSON API로 전환 — **로그인 불필요**해짐 |
+> | v0.14.0 | 통합 SSO 클라이언트 신설, 포털 로그인 복구 → 공지/장학 **본문·첨부** 조회 |
+> | v0.15.0 | LMS 14개 복구 — Canvas API는 멀쩡했고 로그인 경로만 바뀐 것이었음 |
+> | v0.16.0 | 학사 2차 보안인증 통과 → 수강신청·시간표·성적 복구 |
+> | v0.17.0 | 개설과목·강의실 복구, 전 기능 정상화 |
+>
+> **부수 효과** — 공지 계열이 스크래핑에서 공개 API로 옮겨가며 로그인 없이 더 빠르게
+> 동작하고, 조회수·부서·첨부 수 같은 정보도 함께 옵니다.
+>
+> 업그레이드 방법은 [README의 "업데이트"](README.md#업데이트)를 참고하세요.
+> **uvx 사용자는 캐시 때문에 재시작만으로는 갱신되지 않습니다** (`uv cache clean ku-portal-mcp` 필요).
+
+## [0.17.1] - 2026-08-07
+
+코드 리뷰에서 나온 정리. 기능 변경은 없습니다.
+
+### 수정
+- **`kupid_lms_syllabus`의 죽은 폴백 경로 2곳 제거.** 학수번호 재매칭과 강의계획서
+  iframe 조회가 종료된 `infodepot`을 향하고 있었다. 둘 다 `try/except`에 감싸여
+  조용히 실패했지만, 그 전에 `_get_session()`(포털 SSO 로그인)을 호출해
+  **매번 불필요한 로그인 왕복**이 발생했다.
+- **`_stop_helper`의 PID 재사용 위험 제거.** 기록해 둔 PID를 확인 없이 kill하면
+  헬퍼가 이미 끝난 경우 같은 PID를 받은 무관한 프로세스를 죽일 수 있다.
+  `ps`로 명령줄을 확인해 우리 헬퍼일 때만 종료한다.
+- **`fetch_board_page`가 조회 상한 초과를 조용히 삼키던 문제.** 빈 목록을 돌려줘
+  "글이 없다"로 오인됐다. 이제 몇 건을 요청했고 상한이 얼마인지 알리는 오류를 낸다.
+
+### 제거
+- `courses.py` / `grades.py` — 전부 `infodepot` 기반이라 서비스 종료로 무용지물이 됐고,
+  실제 코드에서는 더 이상 참조되지 않았다(테스트만 남아 있었다).
+- `server._with_retry` — 포털 tool이 전부 옮겨가면서 호출부가 사라졌다.
+  LMS는 `_lms_with_retry`를 따로 쓴다.
+
+## [0.17.0] - 2026-08-07
+
+차세대 포털 대응 완결. **학사 시스템(AMS) 이전에 대응해 남은 tool을 전부 복구**했습니다.
+
+### 추가
+- **`kupid_ams_auth_start` / `kupid_ams_auth_verify`** — 학사 시스템 2차 보안인증.
+  학교가 개인정보처리시스템에 2차 인증을 필수화해, 인증을 두 단계 tool로 나눴다.
+  메일로 6자리 코드를 받아 넣으면 약 50분간 세션이 유지된다.
+- `ku_portal_mcp/_ams_auth.py` — 인증 전용 브라우저 헬퍼.
+  AMS 서버가 브라우저 컨텍스트를 검증해 순수 HTTP로는 OTP를 맞게 넣어도 세션이
+  승격되지 않는다(폼 재제출 시 2차 인증 화면이 다시 돌아옴). 이 단계만 브라우저로
+  처리하고 쿠키만 넘겨받아 이후 조회는 httpx로 수행한다.
+  `playwright`는 선택 의존성(extras: `ams`)이라 나머지 tool은 영향받지 않는다.
+- `ku_portal_mcp/ams.py` — 학사 API 클라이언트. 넥사크로 DataSet 규약을 따라
+  조건을 `@d1#<필드>`로 전달하고, 메뉴/프로그램 식별자를 요청에 함께 싣는다.
+
+### 변경
+- **`kupid_my_courses`** — `infodepot` HTML 스크래핑 → AMS `findStdAppcsDtlsList`.
+  학수번호·분반·교수·학점·강의시간/강의실·수납상태 반환.
+- **`kupid_get_all_grades`** — AMS `findStdntGradeAllList`.
+  과목별 등급/평점과 누계(GPA·취득학점·환산점수)를 함께 반환.
+- **`kupid_get_timetable`** — AMS `findStdLctreTimtbOutptList`.
+  교시×요일 격자를 항목 목록으로 펴고 ICS 내보내기를 유지한다.
+  격자 칸이 `학수번호<br>과목<br>교수<br>강의실` 형태라 강의실만 뽑는다.
+- **`kupid_search_courses` / `kupid_room_schedule`** — AMS `findProfLecrmGudncList`.
+  학사 시스템이 제공하는 검색 조건이 교과목명뿐이라 단과대/학과 단위 목록 조회는
+  더 이상 지원하지 않는다. 대신 교과목명으로 학수번호·분반·강의실·건물·캠퍼스를 얻는다.
+- `PERIOD_TIMES`에 10~11교시 추가 (야간 수업이 9교시를 넘어간다).
+- `timetable._resolve_period_time` → `resolve_period_time`으로 공개.
+
+### 제거
+- **`kupid_get_syllabus`** — 학사 시스템에서 강의계획서 메뉴가 사라졌다.
+  `kupid_lms_syllabus`(LMS 강의계획서)를 사용하면 된다.
+
+### 확인된 학교 시스템 변경
+- 학사 기능 `infodepot` → `ams.korea.ac.kr` 이전. 메뉴 코드는 포털 메뉴
+  API(`/sp/main/allMenu/list`)에서 확인: 수강신청조회 `M111422`, 시간표 `M111423`,
+  전체성적 `M112493`, 강의실안내 `M112596`.
+- AMS는 2차 인증 미등록 계정이면 로그인 화면에서 막힌다
+  (`IOPUserStatusChk` → `returnCode 1401`). 모바일 인증 등록 또는 이메일 OTP가 필요하다.
+
+## [0.15.0] - 2026-08-07
+
+차세대 포털 대응 3단계. **LMS 14개 tool을 전부 복구**했습니다. 30개 중 24개가 동작합니다.
+
+### 변경
+- **`lms.py` 로그인 전면 교체** — 폐지된 KSSO 흐름(`_ksso_login`/`_follow_saml_redirects`)을
+  제거하고 통합 SSO 기반 `_sso_login`으로 대체.
+  Canvas API는 죽지 않았고 세션이 붙지 않았을 뿐이었다.
+  - **mylms에서 시작해야 한다.** 로그인 방식 선택 페이지(`xn-sso/login.php`)가
+    `cvs_lgn=true` 컨텍스트를 담은 IdP 링크를 주고, 그 컨텍스트로 로그인해야
+    Canvas 인계 페이지(`learningx/login/from_cc`)로 이어진다.
+    포털용 IdP로 로그인하면 LMS 세션만 생기고 Canvas는 401로 남는다.
+  - `_canvas_login`에 `authenticity_token` 추가. Canvas(Rails)가 `_csrf_token` 쿠키를
+    되돌려받길 요구해 빠뜨리면 400이 난다.
+- `sso.follow_auto_forms` — **자동 제출 폼만** 따라가도록 수정.
+  이전에는 첫 번째 폼을 무조건 제출해 도착 페이지의 로그아웃 폼까지 눌러
+  로그인 직후 로그아웃되는 문제가 있었다. 이제 `.submit()` 호출이 있고
+  hidden 입력만 가진 폼으로 한정한다.
+- `sso` JS location 패턴 — `location.href = "..."`(window 접두어 없음)도 인식.
+
+### 확인된 제약 — 수강·성적·시간표 6개
+학사 기능이 `infodepot` → `ams.korea.ac.kr`로 이전되면서 **2차 보안인증이 필수**가 되었다.
+브라우저로 확인한 결과 이 계정은 모바일 인증 미등록 상태라 로그인 화면에서 막힌다.
+
+    POST sso.korea.ac.kr/korea/auth/IOPUserStatusChk.eps  (user_id=..., command=auth)
+    → {"returnCode":"1401","returnMessage":"No registered user found.
+        Please proceed with mobile authentication registration."}
+
+대안으로 이메일 OTP 경로가 있으며 엔드포인트는 파악해 두었다
+(`IOPOtpReq.eps` 발송 → `IOPOtpVerify.eps` 검증(`cert_no` 6자리, 5분 유효) → 로그인 폼 재제출).
+다만 사용자가 메일에서 코드를 읽어 입력해야 하므로 완전 자동화는 불가능하다.
+
+### 알려진 이슈
+- 수강신청내역·성적·시간표·개설과목·강의계획서·강의실시간표 6개는 위 2차 인증 때문에
+  동작하지 않는다. AMS도 SPA라 로그인 이후 API 재작성이 추가로 필요하다.
+
+## [0.14.0] - 2026-08-07
+
+차세대 포털 대응 2단계. **포털 로그인을 복구**하고 공지·장학 본문/첨부 조회를 되살렸습니다.
+
+### 추가
+- `ku_portal_mcp/sso.py` — 고려대 통합 로그인(`sso.korea.ac.kr`) 클라이언트.
+  새 로그인 폼이 비밀번호를 AES-128-CBC로 암호화해 보내는 것을 그대로 재현한다
+  (`base64(AES-CBC(key, iv, "<pw>|<salt>")) + "|" + base64(iv)`).
+  CryptoJS 레퍼런스 구현과 ASCII/한글/경계길이 3개 케이스에서 바이트 단위 일치를 검증했다.
+  salt와 `l_token`은 로그인 페이지마다 서버가 새로 발급하므로 매번 파싱한다.
+- `sso.follow_auto_forms` — SSO 구간이 302가 아니라 자동 제출 폼과 JS `location` 이동으로
+  이어져 `follow_redirects`만으로는 흐름이 끊긴다. 폼 체인과 JS 이동을 함께 추적한다.
+- `portal_api.fetch_post_detail` / `parse_post_detail` — 게시글 본문·첨부 파싱.
+
+### 변경
+- **`auth.py` 전면 재작성** — 레거시 `.kpd` 로그인 + GRW 세션 → SSO 기반으로 전환.
+  SSO 로그인만으로는 포털 앱 세션이 서지 않아
+  `index.jsp` → `sso_loginuser.jsp` → `POST /proc/Login.eps` 체인까지 완주하고
+  학생 포털(`/p/ST/`) 도달을 확인해야 세션으로 인정한다.
+- `Session` — `ssotoken`/`PORTAL_SESSIONID`/`GRW_SESSIONID` → 쿠키 전체 보관.
+  포털과 SSO가 같은 이름(`JSESSIONID`)의 다른 쿠키를 쓰므로 도메인·경로까지 저장한다.
+- **`kupid_get_notice_detail` / `kupid_get_scholarship_detail` — 로그인 시 본문 전문과
+  첨부파일(파일명/크기/다운로드 URL)을 반환.** 로그인이 안 되면 기존 요약으로 폴백한다.
+- 본문 텍스트화 — 포털 본문은 `<span>2</span>차` 처럼 인라인으로 잘게 쪼개져 있어
+  구분자를 넣은 `get_text`는 단어 중간을 끊는다. 블록 요소와 `<br>`에서만 줄을 나눈다.
+
+### 제거
+- `ku_portal_mcp/scraper.py` — GRW(`grw.korea.ac.kr`) 전용이며 서비스가 종료됐고 참조도 없다.
+
+### 확인된 학교 시스템 변경
+- 통합 로그인이 `ksso.korea.ac.kr`(`*.do`) → `sso.korea.ac.kr`(`*.eps`)로 이전.
+- LMS IdP 진입점이 `/exsignon/` → `/exsignon_new/sso/sso_idp_login.php`로 변경.
+- LMS가 Canvas(`mylms`)에서 `lms.korea.ac.kr`(Laravel) 체계로 이전 중. Canvas API는 401/404.
+- 학사 기능이 `infodepot` → `ams.korea.ac.kr`로 이전.
+  포털 메뉴 API(`/sp/main/allMenu/list`)에서 메뉴 코드를 확인했다 —
+  수강신청조회 `M111422`, 시간표조회 `M111423`, 전체성적조회 `M112493`, 강의실안내 `M112596`.
+- 이 계정 기준으로 2차 보안인증(OTP/푸시)은 로그인 시 요구되지 않았다.
+
+### 알려진 이슈
+- LMS 14개와 수강·성적·시간표 6개는 여전히 동작하지 않는다. 학교가 백엔드를 교체해
+  호스트 치환이 아니라 API 재작성이 필요하다.
+- 무인증 게시판 조회는 최신 500건까지만 가능하다(암호화된 `encQS` 페이징이 세션에 묶여 있음).
+
+## [0.13.0] - 2026-08-07
+
+2026년 고려대 **차세대 포털 전환** 대응 1단계. 레거시 백엔드가 서비스를 종료하면서
+공지·학사일정·장학 계열을 무인증 공개 API로 전환했습니다.
+
+### 배경 — 확인된 학교 시스템 변경
+- 레거시 포털 경로(`/front/Intro.kpd`, `/common/Login.kpd`, `/front/Main.kpd`)가 전부 `301 → /index.jsp`로 폐지.
+  새 인증은 `sso.korea.ac.kr/svc/tk/Auth.eps` 기반 SSO.
+- `infodepot.korea.ac.kr`, `grw.korea.ac.kr`, `ksso.korea.ac.kr` **서비스 종료** (TCP 443만 열려 있고 TLS 협상 실패).
+- 통합 로그인이 `ksso` → `sso.korea.ac.kr`로 이전, 엔드포인트 확장자도 `.do` → `.eps`로 변경.
+- **2026-07-20 13:00부터 학사·행정·연구·전자결재·LMS·통계에 2차 보안인증(OTP/푸시) 적용.**
+
+### 추가
+- `ku_portal_mcp/portal_api.py` — 차세대 포털 게시판 JSON API(`/ctt/svc/bulletin`) + 교무처 학사일정 클라이언트.
+  **인증 불필요.** 게시판 ID 매핑(공지 6, 장학 10, 부고 1, 행사 3, 세종 13 등) 포함.
+- `kupid_get_schedules`에 `month` 필터 — 특정 월 학사일정만 조회 (예: `month="9월"`).
+
+### 변경
+- **`kupid_get_notices` / `kupid_get_scholarships` / `kupid_search` — 로그인 불필요로 전환.**
+  GRW HTML 스크래핑 → 포털 공개 JSON API. 응답에 `department`, `views`, `is_notice`,
+  `attachments`, `comments`, `summary`, `total` 필드 추가.
+- **`kupid_get_schedules` — 게시판 목록에서 학사일정표로 소스 변경** (`registrar.korea.ac.kr`).
+  파라미터가 `page`/`count` → `year`/`semester`/`month`로 바뀌었습니다. 계절학기는 인접 정규학기로 매핑됩니다.
+- **`kupid_get_notice_detail` / `kupid_get_scholarship_detail` — 파라미터가 `notice_id`+`message_id` → `post_seq`로 변경.**
+  차세대 포털이 본문 전문·첨부에 로그인을 요구하므로 요약(약 200자)과 원문 링크를 반환합니다.
+- `kupid_search`의 `board` 옵션에서 `schedule` 제거 (학사일정은 게시판이 아님) → `all`/`notice`/`scholarship`.
+
+### 제거
+- **`kupid_get_schedule_detail`** — 학사일정이 게시판에서 표 형태로 바뀌어 상세 개념이 사라졌습니다. (tool 31개 → 30개)
+
+### 알려진 이슈
+- 로그인이 필요한 tool 22개(`kupid_login`, 수강/성적/시간표 6개, LMS 14개)는 SSO 이전과
+  2차 보안인증 대응이 끝날 때까지 동작하지 않습니다. 후속 단계에서 복구 예정입니다.
+- 무인증 게시판 조회는 최신 500건까지만 가능합니다. 포털이 그 이후 페이징을
+  암호화된 `encQS` URL + 로그인 세션에 묶어두었습니다.
+
 ## [0.12.0] - 2026-06-07
 
 ### 추가

@@ -1,13 +1,13 @@
-"""Canvas LMS integration via KSSO SAML SSO.
+"""Canvas LMS integration via 고려대 통합 SSO.
 
-Accesses mylms.korea.ac.kr (Canvas LMS) through Korea University's
-KSSO single sign-on system. The flow is:
+mylms.korea.ac.kr(Canvas)에 접속한다. 2026년 전환으로 KSSO가 폐지되어
+sso.korea.ac.kr 기반으로 흐름이 바뀌었다.
 
-1. lms.korea.ac.kr/exsignon -> ksso.korea.ac.kr (SAML IdP)
-2. KSSO login (UserTypeCheck -> OTPCheck -> Login.do)
-3. SAML redirect chain -> Canvas session establishment
-4. RSA-decrypted password -> Canvas native login
-5. Canvas REST API access via session cookies
+1. mylms.korea.ac.kr -> lms.korea.ac.kr/xn-sso/login.php (로그인 방식 선택)
+2. '포털 계정 로그인' 링크(exsignon_new/sso/sso_idp_login.php)로 SSO 로그인
+3. mylms/learningx/login/from_cc -- Canvas 인계 페이지
+4. 페이지에 실린 RSA 개인키로 임시 비밀번호를 복호화해 Canvas 네이티브 로그인
+5. 세션 쿠키로 Canvas REST API 호출
 
 Requires: cryptography (for RSA decryption)
 """
@@ -18,20 +18,22 @@ import time
 import logging
 import base64
 import html as html_lib
+from urllib.parse import unquote
 from dataclasses import dataclass, asdict
 from pathlib import Path
 
 import httpx
+from bs4 import BeautifulSoup
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import padding
 
+from . import sso
 from ._storage import write_secure_json as _write_secure_json
 
 logger = logging.getLogger(__name__)
 
 LMS_BASE = "https://lms.korea.ac.kr"
 MYLMS_BASE = "https://mylms.korea.ac.kr"
-KSSO_BASE = "https://ksso.korea.ac.kr"
 
 CACHE_DIR = Path.home() / ".cache" / "ku-portal-mcp"
 LMS_SESSION_FILE = CACHE_DIR / "lms_session.json"
@@ -91,111 +93,28 @@ def _clear_lms_session() -> None:
 def _make_client() -> httpx.AsyncClient:
     return httpx.AsyncClient(
         timeout=30.0,
-        follow_redirects=False,
+        follow_redirects=True,
         headers={"user-agent": _UA},
     )
 
 
-async def _ksso_login(
+async def _sso_login(
     client: httpx.AsyncClient, user_id: str, password: str
-) -> tuple[str, str]:
-    """Perform KSSO SAML login and return (redirect_url, emp_no)."""
-    # Step 1: Get KSSO login page via exsignon
-    resp = await client.get(
-        f"{LMS_BASE}/exsignon/sso/sso_idp_login.php",
-        params={"RelayState": f"{LMS_BASE}/xn-sso/gw-cb.php"},
-        headers={"accept": "text/html"},
-    )
-    if resp.status_code != 302:
-        raise RuntimeError(f"exsignon redirect failed: {resp.status_code}")
-    ksso_url = resp.headers["location"]
+) -> httpx.Response:
+    """포털 계정 SSO로 로그인해 Canvas 인계 페이지(from_cc)까지 도달한다.
 
-    # Step 2: Load login form (get JSESSIONID + CSRF tokens)
-    resp = await client.get(
-        ksso_url,
-        headers={"accept": "text/html", "referer": f"{LMS_BASE}/"},
-    )
-    html = resp.text
-    l_token = re.search(r'name=["\']l_token["\'][^>]*value=["\']([^"\']*)["\']', html)
-    c_token = re.search(r'name=["\']c_token["\'][^>]*value=["\']([^"\']*)["\']', html)
-    if not l_token or not c_token:
-        raise RuntimeError("Failed to extract KSSO CSRF tokens")
+    mylms에서 시작해야 하는 이유: 로그인 방식 선택 페이지가 `cvs_lgn=true`
+    컨텍스트를 담은 IdP 링크를 주고, 그 컨텍스트로 로그인해야 Canvas 인계
+    페이지로 이어진다. 포털용 IdP로 로그인하면 LMS 세션만 생기고 끝난다.
+    """
+    resp = await client.get(f"{MYLMS_BASE}/", headers={"accept": "text/html"})
+    link = BeautifulSoup(resp.text, "lxml").select_one('a[href*="sso_idp_login.php"]')
+    if not link:
+        raise RuntimeError(
+            "LMS 로그인 페이지에서 포털 계정 로그인 링크를 찾지 못했습니다."
+        )
 
-    ajax_headers = {
-        "referer": ksso_url,
-        "content-type": "application/x-www-form-urlencoded; charset=UTF-8",
-        "x-requested-with": "XMLHttpRequest",
-        "accept": "application/json",
-        "origin": KSSO_BASE,
-    }
-
-    # Step 3: UserTypeCheck
-    resp = await client.post(
-        f"{KSSO_BASE}/logincheck/UserTypeCheck.do",
-        data={
-            "l_token": l_token.group(1),
-            "user_timezone_offset": "-540",
-            "c_token": c_token.group(1),
-            "user_id": "",
-            "one_id": user_id,
-            "user_password": password,
-        },
-        headers=ajax_headers,
-    )
-    data = resp.json()
-    if data.get("result") != "success":
-        msg = data.get("msg", "unknown")
-        error_map = {
-            "pwd_chk_fail": "비밀번호가 틀렸습니다. KU_PORTAL_PW 환경변수를 확인하세요.",
-            "id_chk_fail": "아이디를 찾을 수 없습니다. KU_PORTAL_ID 환경변수를 확인하세요.",
-            "lock": "계정이 잠겼습니다. 포털에서 잠금 해제 후 다시 시도하세요.",
-        }
-        human_msg = error_map.get(msg, f"KSSO 로그인 실패: {msg}")
-        raise RuntimeError(human_msg)
-    emp_no = data["types"][0]["user_id"]
-    new_c_token = data.get("c_token", c_token.group(1))
-
-    # Step 4: OTP Check
-    resp = await client.post(
-        f"{KSSO_BASE}/logincheck/OTPCheck.do",
-        data={"type": "NeedOTPCheck", "emp_no": emp_no},
-        headers=ajax_headers,
-    )
-    otp_result = resp.json().get("result")
-    if otp_result != "false":
-        raise RuntimeError(f"OTP required ({otp_result}), not supported in MCP")
-
-    # Step 5: Login.do
-    resp = await client.post(
-        f"{KSSO_BASE}/Login.do",
-        data={
-            "l_token": l_token.group(1),
-            "user_timezone_offset": "-540",
-            "c_token": new_c_token,
-            "user_id": emp_no,
-            "one_id": user_id,
-            "user_password": password,
-        },
-        headers={
-            "referer": ksso_url,
-            "content-type": "application/x-www-form-urlencoded",
-            "origin": KSSO_BASE,
-        },
-    )
-    if resp.status_code != 302:
-        raise RuntimeError(f"KSSO Login.do failed: {resp.status_code}")
-
-    return resp.headers["location"], emp_no
-
-
-async def _follow_saml_redirects(client: httpx.AsyncClient, url: str) -> str:
-    """Follow the SAML redirect chain until we hit the callback page with iframe."""
-    while url:
-        resp = await client.get(url, headers={"accept": "text/html"})
-        if resp.status_code == 200:
-            return resp.text
-        url = resp.headers.get("location", "")
-    raise RuntimeError("SAML redirect chain ended without callback page")
+    return await sso.login_to_service(client, link["href"], user_id, password)
 
 
 async def _canvas_login(
@@ -225,7 +144,13 @@ async def _canvas_login(
         padding.PKCS1v15(),
     ).decode()
 
-    # Submit Canvas login
+    # Canvas\ub294 Rails \uc571\uc774\ub77c _csrf_token \ucfe0\ud0a4\ub97c authenticity_token\uc73c\ub85c
+    # \ub418\ub3cc\ub824\ubc1b\uae38 \uc694\uad6c\ud55c\ub2e4. \ube60\ub728\ub9ac\uba74 400\uc744 \ub3cc\ub824\uc900\ub2e4.
+    csrf = ""
+    for cookie in client.cookies.jar:
+        if cookie.name == "_csrf_token" and "mylms" in (cookie.domain or ""):
+            csrf = unquote(cookie.value or "")
+
     resp = await client.post(
         f"{MYLMS_BASE}/login/canvas",
         data={
@@ -235,22 +160,18 @@ async def _canvas_login(
             "pseudonym_session[unique_id]": unique_id.group(1),
             "pseudonym_session[password]": canvas_password,
             "pseudonym_session[remember_me]": "0",
+            "authenticity_token": csrf,
         },
         headers={
             "content-type": "application/x-www-form-urlencoded",
             "origin": MYLMS_BASE,
             "accept": "text/html",
             "referer": iframe_url or f"{MYLMS_BASE}/login",
+            "x-csrf-token": csrf,
         },
     )
 
-    if resp.status_code == 302:
-        # Follow the success redirect
-        await client.get(
-            resp.headers["location"],
-            headers={"accept": "text/html"},
-        )
-    elif resp.status_code != 200:
+    if resp.status_code not in (200, 302):
         raise RuntimeError(f"Canvas login failed: {resp.status_code}")
 
 
@@ -276,9 +197,9 @@ async def verify_lms_session(session: LMSSession) -> bool:
 
 
 async def lms_login(user_id: str, password: str) -> LMSSession:
-    """Full LMS login: KSSO -> SAML -> Canvas -> API access.
+    """전체 LMS 로그인: 통합 SSO → Canvas 인계 → Canvas API 접근.
 
-    Returns an LMSSession with cookies for Canvas API calls.
+    Canvas API 호출에 쓸 쿠키를 담은 LMSSession을 반환한다.
     """
     if not user_id or not password:
         raise RuntimeError(
@@ -298,26 +219,18 @@ async def lms_login(user_id: str, password: str) -> LMSSession:
         logger.info("LMS session near expiry and invalid on server, re-logging in")
 
     async with _make_client() as client:
-        # KSSO login
-        redirect_url, emp_no = await _ksso_login(client, user_id, password)
+        # 통합 SSO 로그인 → Canvas 인계 페이지(from_cc)
+        resp = await _sso_login(client, user_id, password)
+        handoff_html, handoff_url = resp.text, str(resp.url)
 
-        # Follow SAML redirects to callback page
-        callback_html = await _follow_saml_redirects(client, redirect_url)
+        if "loginCryption" not in handoff_html:
+            raise RuntimeError(
+                "Canvas 인계 페이지에 도달하지 못했습니다 "
+                f"(위치: {handoff_url}). LMS 로그인 절차가 변경되었을 수 있습니다."
+            )
 
-        # Extract iframe URL and load it
-        iframe_src = re.search(r'iframe\.src="([^"]+)"', callback_html)
-        if not iframe_src:
-            raise RuntimeError("No iframe found in callback page")
-
-        iframe_url = iframe_src.group(1)
-        resp = await client.get(
-            iframe_url,
-            headers={"accept": "text/html", "referer": f"{LMS_BASE}/"},
-        )
-        iframe_html = resp.text
-
-        # Canvas login with RSA decryption
-        await _canvas_login(client, iframe_html, iframe_url)
+        # 페이지에 실린 RSA 개인키로 임시 비밀번호를 풀어 Canvas 네이티브 로그인
+        await _canvas_login(client, handoff_html, handoff_url)
 
         # Extract cookies
         cookies = _extract_cookies(client)
@@ -334,7 +247,7 @@ async def lms_login(user_id: str, password: str) -> LMSSession:
 
     session = LMSSession(
         cookies=cookies,
-        user_id=emp_no,
+        user_id=str(user_data.get("login_id") or user_id),
         user_name=user_data.get("name", ""),
         canvas_user_id=user_data.get("id", 0),
         created_at=time.time(),

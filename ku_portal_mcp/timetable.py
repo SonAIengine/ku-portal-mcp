@@ -33,6 +33,8 @@ PERIOD_TIMES = {
     "7": ("18:00", "18:50"),
     "8": ("19:00", "19:50"),
     "9": ("20:00", "20:50"),
+    "10": ("21:00", "21:50"),
+    "11": ("22:00", "22:50"),
 }
 
 
@@ -57,8 +59,7 @@ async def fetch_timetable_day(session: Session, day: int) -> list[TimetableEntry
         List of timetable entries for that day.
     """
     cookie = (
-        f"ssotoken={session.ssotoken}; "
-        f"PORTAL_SESSIONID={session.portal_session_id};"
+        f"ssotoken={session.ssotoken}; PORTAL_SESSIONID={session.portal_session_id};"
     )
 
     async with httpx.AsyncClient(timeout=30.0) as client:
@@ -104,21 +105,23 @@ def _parse_timetable_html(html: str, day: int) -> list[TimetableEntry]:
             continue
 
         # Resolve start/end times from period
-        start_time, end_time = _resolve_period_time(period)
+        start_time, end_time = resolve_period_time(period)
 
-        entries.append(TimetableEntry(
-            day_of_week=day_name,
-            period=period,
-            subject_name=subject,
-            classroom=classroom,
-            start_time=start_time,
-            end_time=end_time,
-        ))
+        entries.append(
+            TimetableEntry(
+                day_of_week=day_name,
+                period=period,
+                subject_name=subject,
+                classroom=classroom,
+                start_time=start_time,
+                end_time=end_time,
+            )
+        )
 
     return entries
 
 
-def _resolve_period_time(period: str) -> tuple[str, str]:
+def resolve_period_time(period: str) -> tuple[str, str]:
     """Convert period string (e.g., '1', '2-3') to start/end times."""
     parts = re.split(r"[-~]", period.strip())
     start_period = parts[0].strip()
@@ -187,17 +190,19 @@ def timetable_to_ics(entries: list[TimetableEntry], semester_start: str = "") ->
 
         uid = f"{entry.subject_name}-{entry.day_of_week}-{entry.period}@kupid"
 
-        lines.extend([
-            "BEGIN:VEVENT",
-            f"DTSTART:{dtstart.strftime('%Y%m%dT%H%M%S')}",
-            f"DTEND:{dtend.strftime('%Y%m%dT%H%M%S')}",
-            f"SUMMARY:{entry.subject_name}",
-            f"LOCATION:{entry.classroom}",
-            f"DESCRIPTION:교시: {entry.period}",
-            f"UID:{uid}",
-            "RRULE:FREQ=WEEKLY;COUNT=16",
-            "END:VEVENT",
-        ])
+        lines.extend(
+            [
+                "BEGIN:VEVENT",
+                f"DTSTART:{dtstart.strftime('%Y%m%dT%H%M%S')}",
+                f"DTEND:{dtend.strftime('%Y%m%dT%H%M%S')}",
+                f"SUMMARY:{entry.subject_name}",
+                f"LOCATION:{entry.classroom}",
+                f"DESCRIPTION:교시: {entry.period}",
+                f"UID:{uid}",
+                "RRULE:FREQ=WEEKLY;COUNT=16",
+                "END:VEVENT",
+            ]
+        )
 
     lines.append("END:VCALENDAR")
     return "\r\n".join(lines)

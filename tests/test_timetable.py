@@ -1,12 +1,16 @@
-from ku_portal_mcp.timetable import TimetableEntry, _resolve_period_time, timetable_to_ics
+from ku_portal_mcp.timetable import (
+    TimetableEntry,
+    resolve_period_time,
+    timetable_to_ics,
+)
 
 
-def test_resolve_period_time_for_range():
-    assert _resolve_period_time("2-3") == ("10:30", "13:15")
+def testresolve_period_time_for_range():
+    assert resolve_period_time("2-3") == ("10:30", "13:15")
 
 
-def test_resolve_period_time_returns_original_value_for_unknown_period():
-    assert _resolve_period_time("A") == ("A", "A")
+def testresolve_period_time_returns_original_value_for_unknown_period():
+    assert resolve_period_time("A") == ("A", "A")
 
 
 def test_timetable_to_ics_generates_weekly_event():

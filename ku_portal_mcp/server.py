@@ -2,13 +2,12 @@
 
 Provides tools for accessing Korea University portal (KUPID):
 - Login/session management
-- Notice board (kind=11)
-- Academic schedule (kind=89)
-- Scholarship notices (kind=88)
+- Notice board (bulletin API b=6, no auth)
+- Academic schedule (registrar.korea.ac.kr, no auth)
+- Scholarship notices (bulletin API b=10, no auth)
 - Search across all boards
 - Library seat availability
-- Personal timetable
-- Course search & syllabus
+- Academic records via AMS (수강신청/시간표/성적/개설과목/강의실, 2차 인증 필요)
 - Canvas LMS (mylms.korea.ac.kr) integration
 """
 
@@ -24,32 +23,33 @@ import httpx
 from dotenv import load_dotenv
 from mcp.server.fastmcp import FastMCP
 
+from . import ams
 from .academic import resolve_year_semester
-from .auth import login, clear_session, Session
-from .scraper import fetch_notice_list, fetch_notice_detail, NoticeItem
+from .auth import login, clear_session, make_client, Session
+from .portal_api import (
+    BoardPost,
+    BOARD_NAMES,
+    BOARD_NOTICE,
+    BOARD_SCHOLARSHIP,
+    MAX_LIST_SIZE,
+    fetch_academic_schedule,
+    fetch_board,
+    fetch_board_page,
+    fetch_post_detail,
+    search_boards,
+)
 from .library import (
     fetch_library_seats,
     fetch_all_seats,
     LIBRARY_CODES,
 )
 from .timetable import (
-    fetch_timetable_day,
-    fetch_full_timetable,
+    TimetableEntry,
+    resolve_period_time,
     timetable_to_ics,
-)
-from .courses import (
-    search_courses,
-    search_grad_courses,
-    fetch_syllabus,
-    fetch_departments,
-    fetch_my_courses,
-    find_room_schedule,
-    COLLEGE_CODES,
-    GRAD_COLLEGE_CODES,
 )
 from .dept_notices import fetch_dept_notice_list, fetch_dept_notice_detail
 from .dept_registry import resolve_site, list_all_sites, DEFAULT_SITES
-from .grades import fetch_all_grades
 from .lms import (
     lms_login,
     LMSSession,
@@ -124,34 +124,241 @@ async def _get_session() -> Session:
         return _session
 
 
-async def _with_retry(fn, *args, **kwargs):
-    """Execute fn with session, auto re-login on stale session and retry once."""
-    try:
-        session = await _get_session()
-        return await fn(session, *args, **kwargs)
-    except _RETRIABLE as e:
-        logger.warning(
-            f"KUPID request failed ({type(e).__name__}: {e}), retrying with fresh session"
-        )
-        global _session
-        async with _session_lock:
-            clear_session()
-            _session = None
-        session = await _get_session()
-        return await fn(session, *args, **kwargs)
-
-
-def _format_items(items: list[NoticeItem], count: int) -> list[dict]:
+def _format_posts(posts: list[BoardPost]) -> list[dict]:
     return [
         {
-            "index": item.index,
-            "message_id": item.message_id,
-            "title": item.title,
-            "date": item.date,
-            "writer": item.writer,
+            "post_seq": post.post_seq,
+            "title": post.title,
+            "date": post.date,
+            "writer": post.writer,
+            "department": post.department,
+            "views": post.views,
+            "is_notice": post.is_notice,
+            "attachments": post.attachments,
+            "comments": post.comments,
+            "summary": post.summary,
+            "url": post.url,
         }
-        for item in items[:count]
+        for post in posts
     ]
+
+
+async def _find_post(board_id: int, post_seq: int) -> BoardPost | None:
+    """게시판 목록에서 post_seq에 해당하는 글을 찾는다.
+
+    무인증으로는 게시글 단건 조회 API가 없어 목록에서 선형 탐색한다.
+    """
+    posts, _ = await fetch_board(board_id, limit=MAX_LIST_SIZE)
+    for post in posts:
+        if post.post_seq == post_seq:
+            return post
+    return None
+
+
+def _normalize_calendar_semester(semester: str) -> str:
+    """학사일정표는 정규학기(1/2)만 지원하므로 계절학기를 인접 학기로 매핑한다.
+
+    학사일정표의 2학기는 8월~다음해 1월을 포함하므로, 여름(7~8월)과
+    겨울(1~2월) 계절학기는 모두 해당 학년도 2학기 표에 속한다.
+    """
+    return "2" if semester in ("summer", "winter") else semester
+
+
+async def _board_detail(board_id: int, post_seq: int, label: str) -> dict[str, Any]:
+    """게시글 상세를 반환한다.
+
+    포털 로그인이 되면 본문 전문과 첨부파일을, 실패하면 목록의 요약을 반환한다.
+    """
+    try:
+        post = await _find_post(board_id, post_seq)
+        if not post:
+            return {
+                "success": False,
+                "message": (
+                    f"post_seq={post_seq}인 {label}을(를) 최근 {MAX_LIST_SIZE}건에서 "
+                    f"찾지 못했습니다. 오래된 글은 무인증 조회 범위를 벗어납니다."
+                ),
+            }
+    except Exception as e:
+        logger.error(f"Failed to fetch {label} list: {e}")
+        return {"success": False, "message": f"{label} 조회 실패: {e}"}
+
+    summary = _format_posts([post])[0]
+
+    try:
+        session = await _get_session()
+        async with make_client(session) as client:
+            detail = await fetch_post_detail(client, post.url)
+    except Exception as e:
+        # 로그인 없이도 목록 수준 정보는 돌려준다.
+        logger.warning(f"{label} 본문 조회 실패, 요약으로 대체: {e}")
+        return {
+            "success": True,
+            "detail": summary,
+            "note": (
+                f"본문 전문은 포털 로그인이 필요합니다 ({e}). "
+                "요약(summary)과 원문 링크(url)만 제공됩니다."
+            ),
+        }
+
+    return {
+        "success": True,
+        "detail": {
+            **summary,
+            # 팝업 페이지에는 작성자 이름이 없어 목록 값을 유지한다.
+            "title": detail.title or summary["title"],
+            "date": detail.date or summary["date"],
+            "department": detail.department or summary["department"],
+            "approver": detail.approver,
+            "views": detail.views or summary["views"],
+            "content": detail.content,
+            "attachments": detail.attachments,
+        },
+    }
+
+
+# AMS 시간표 격자의 요일 접두어 → 표시 이름
+_DAY_LABELS = {
+    "mon": "월",
+    "tue": "화",
+    "wed": "수",
+    "thu": "목",
+    "fri": "금",
+    "sat": "토",
+}
+
+
+async def _resolve_ams_term(
+    session: ams.AmsSession, year: str = "", semester: str = ""
+) -> str:
+    """학년도/학기를 AMS 학기 코드(예: 20261R)로 바꾼다.
+
+    조회 가능한 학기만 서버가 알려주므로, 지정된 값이 목록에 없으면
+    가장 최근 학기로 되돌린다.
+    """
+    terms = await ams.fetch_terms(session)
+    if not terms:
+        raise RuntimeError("조회 가능한 학기가 없습니다.")
+
+    if year and semester:
+        wanted = f"{year}{semester}R"
+        for term in terms:
+            if term.get("code") == wanted:
+                return term["code"]
+        logger.warning(f"{wanted} 학기를 찾지 못해 최근 학기로 조회합니다")
+
+    return terms[0]["code"]
+
+
+def _sum_credits(rows: list[dict]) -> float:
+    """'2.0(2)' 형태의 학점 문자열을 합산한다."""
+    total = 0.0
+    for row in rows:
+        raw = (row.get("cdtTime") or "").split("(")[0].strip()
+        try:
+            total += float(raw)
+        except ValueError:
+            continue
+    return round(total, 1)
+
+
+def _cell_classroom(cell: str) -> str:
+    """격자 칸에서 강의실만 뽑는다.
+
+    칸은 '<학수번호-분반><br><과목명><br><교수><br><강의실>' 형태로 온다.
+    """
+    parts = [p.strip() for p in re.split(r"<br\s*/?>", cell or "") if p.strip()]
+    return parts[-1] if len(parts) > 1 else ""
+
+
+def _grid_to_entries(grid: list[dict]) -> list[TimetableEntry]:
+    """AMS 시간표 격자(교시 행 × 요일 열)를 시간표 항목 목록으로 편다."""
+    entries = []
+    for row in grid:
+        period = (row.get("timeTime") or "").replace("교시", "").strip()
+        start, end = resolve_period_time(period)
+        for prefix, label in _DAY_LABELS.items():
+            subject = row.get(f"{prefix}SubjtNm")
+            if not subject:
+                continue
+            entries.append(
+                TimetableEntry(
+                    day_of_week=label,
+                    period=period,
+                    subject_name=subject,
+                    classroom=_cell_classroom(row.get(f"{prefix}Nm") or ""),
+                    start_time=start,
+                    end_time=end,
+                )
+            )
+    return entries
+
+
+async def _get_ams_session() -> ams.AmsSession:
+    """AMS 세션을 가져온다. 없으면 2차 인증이 필요하다고 알린다."""
+    session = ams.load_session()
+    if session and session.is_valid:
+        return session
+    raise RuntimeError(
+        "AMS(학사) 2차 보안인증이 필요합니다. "
+        "kupid_ams_auth_start()로 인증 코드를 받은 뒤 "
+        "kupid_ams_auth_verify(code)로 인증을 완료하세요."
+    )
+
+
+# ──────────────────────────────────────────────
+# 학사 시스템(AMS) 2차 인증
+# ──────────────────────────────────────────────
+
+
+@server.tool()
+async def kupid_ams_auth_start() -> dict[str, Any]:
+    """학사 시스템(AMS) 2차 보안인증을 시작해 이메일로 인증 코드를 보냅니다.
+
+    수강신청내역·시간표·성적 조회는 학교 정책상 2차 보안인증이 필요합니다.
+    이 tool을 호출하면 등록된 메일로 6자리 코드가 발송되며(5분 유효),
+    kupid_ams_auth_verify(code)로 인증을 마치면 약 50분간 세션이 유지됩니다.
+    """
+    try:
+        session = ams.load_session()
+        if session and session.is_valid and await ams.verify_session(session):
+            return {
+                "success": True,
+                "already_authenticated": True,
+                "message": "이미 인증된 세션이 있습니다. 바로 조회할 수 있습니다.",
+            }
+
+        masked_email = await ams.start_login()
+        return {
+            "success": True,
+            "already_authenticated": False,
+            "masked_email": masked_email,
+            "message": (
+                f"{masked_email or '등록된 메일'}로 6자리 인증 코드를 보냈습니다. "
+                "5분 안에 kupid_ams_auth_verify(code)로 입력하세요."
+            ),
+        }
+    except Exception as e:
+        logger.error(f"AMS auth start failed: {e}")
+        return {"success": False, "message": f"AMS 인증 시작 실패: {e}"}
+
+
+@server.tool()
+async def kupid_ams_auth_verify(code: str) -> dict[str, Any]:
+    """이메일로 받은 6자리 코드로 학사 시스템(AMS) 인증을 완료합니다.
+
+    Args:
+        code: 메일로 받은 6자리 인증 코드
+    """
+    try:
+        await ams.complete_login(code)
+        return {
+            "success": True,
+            "message": "AMS 인증 완료. 수강신청내역·시간표·성적을 조회할 수 있습니다.",
+        }
+    except Exception as e:
+        logger.error(f"AMS auth verify failed: {e}")
+        return {"success": False, "message": f"AMS 인증 실패: {e}"}
 
 
 # ──────────────────────────────────────────────
@@ -180,22 +387,22 @@ async def kupid_login() -> dict[str, Any]:
 
 @server.tool()
 async def kupid_get_notices(page: int = 1, count: int = 20) -> dict[str, Any]:
-    """KUPID 포털의 공지사항 목록을 조회합니다.
+    """KUPID 포털의 공지사항 목록을 조회합니다. (로그인 불필요)
+
+    상단 고정 공지가 먼저 오고 그 다음 최신순으로 정렬됩니다.
+    무인증 조회는 최신 500건까지만 가능합니다.
 
     Args:
         page: 페이지 번호 (기본값: 1)
         count: 한 페이지당 항목 수 (기본값: 20)
     """
     try:
-
-        async def _fetch(session):
-            return await fetch_notice_list(session, kind="11", page=page, count=count)
-
-        items = await _with_retry(_fetch)
+        posts, total = await fetch_board_page(BOARD_NOTICE, page=page, count=count)
         return {
             "success": True,
-            "count": len(items),
-            "notices": _format_items(items, count),
+            "count": len(posts),
+            "total": total,
+            "notices": _format_posts(posts),
         }
     except Exception as e:
         logger.error(f"Failed to fetch notices: {e}")
@@ -203,64 +410,57 @@ async def kupid_get_notices(page: int = 1, count: int = 20) -> dict[str, Any]:
 
 
 @server.tool()
-async def kupid_get_notice_detail(
-    notice_id: str, message_id: str = ""
-) -> dict[str, Any]:
-    """KUPID 공지사항의 상세 내용을 조회합니다.
+async def kupid_get_notice_detail(post_seq: int) -> dict[str, Any]:
+    """KUPID 공지사항의 상세 정보를 조회합니다. (로그인 불필요)
+
+    차세대 포털은 본문 전문에 로그인을 요구하므로 요약과 원문 링크를 제공합니다.
 
     Args:
-        notice_id: 공지사항 index (kupid_get_notices 결과의 index 필드)
-        message_id: 공지사항 message_id (kupid_get_notices 결과의 message_id 필드)
+        post_seq: 공지사항 post_seq (kupid_get_notices 결과의 post_seq 필드)
     """
-    try:
-        item = NoticeItem(
-            index=notice_id,
-            message_id=message_id,
-            kind="11",
-            title="",
-            date="",
-            writer="",
-        )
-
-        async def _fetch(session):
-            return await fetch_notice_detail(session, item)
-
-        detail = await _with_retry(_fetch)
-        return {
-            "success": True,
-            "notice": {
-                "id": detail.id,
-                "title": detail.title,
-                "date": detail.date,
-                "writer": detail.writer,
-                "content": detail.content,
-                "attachments": detail.attachments,
-                "url": detail.url,
-            },
-        }
-    except Exception as e:
-        logger.error(f"Failed to fetch notice detail: {e}")
-        return {"success": False, "message": f"공지사항 상세 조회 실패: {e}"}
+    return await _board_detail(BOARD_NOTICE, post_seq, "공지사항")
 
 
 @server.tool()
-async def kupid_get_schedules(page: int = 1, count: int = 20) -> dict[str, Any]:
-    """KUPID 포털의 학사일정 목록을 조회합니다.
+async def kupid_get_schedules(
+    year: int = 0, semester: int = 0, month: str = ""
+) -> dict[str, Any]:
+    """고려대학교 학사일정을 조회합니다. (로그인 불필요)
+
+    교무처 학사일정표(registrar.korea.ac.kr)에서 학기별 일정을 가져옵니다.
 
     Args:
-        page: 페이지 번호 (기본값: 1)
-        count: 한 페이지당 항목 수 (기본값: 20)
+        year: 학년도 (예: 2026). 0이면 현재 학년도
+        semester: 학기 (1 또는 2). 0이면 현재 학기
+        month: 특정 월만 필터링 (예: "8월"). 비우면 전체
     """
     try:
+        resolved_year, resolved_semester = resolve_year_semester(
+            str(year) if year else "", str(semester) if semester else ""
+        )
+        resolved_semester = _normalize_calendar_semester(resolved_semester)
+        if resolved_semester not in ("1", "2"):
+            return {
+                "success": False,
+                "message": f"학사일정은 1 또는 2학기만 지원합니다 (입력: {semester})",
+            }
 
-        async def _fetch(session):
-            return await fetch_notice_list(session, kind="89", page=page, count=count)
+        entries, caption = await fetch_academic_schedule(
+            resolved_year, resolved_semester
+        )
 
-        items = await _with_retry(_fetch)
+        if month:
+            entries = [e for e in entries if e.month == month]
+
         return {
             "success": True,
-            "count": len(items),
-            "schedules": _format_items(items, count),
+            "year": resolved_year,
+            "semester": resolved_semester,
+            "caption": caption,
+            "count": len(entries),
+            "schedules": [
+                {"month": e.month, "date": e.date, "event": e.event} for e in entries
+            ],
         }
     except Exception as e:
         logger.error(f"Failed to fetch schedules: {e}")
@@ -268,64 +468,20 @@ async def kupid_get_schedules(page: int = 1, count: int = 20) -> dict[str, Any]:
 
 
 @server.tool()
-async def kupid_get_schedule_detail(
-    schedule_id: str, message_id: str = ""
-) -> dict[str, Any]:
-    """KUPID 학사일정의 상세 내용을 조회합니다.
-
-    Args:
-        schedule_id: 학사일정 index (kupid_get_schedules 결과의 index 필드)
-        message_id: 학사일정 message_id (kupid_get_schedules 결과의 message_id 필드)
-    """
-    try:
-        item = NoticeItem(
-            index=schedule_id,
-            message_id=message_id,
-            kind="89",
-            title="",
-            date="",
-            writer="",
-        )
-
-        async def _fetch(session):
-            return await fetch_notice_detail(session, item)
-
-        detail = await _with_retry(_fetch)
-        return {
-            "success": True,
-            "schedule": {
-                "id": detail.id,
-                "title": detail.title,
-                "date": detail.date,
-                "writer": detail.writer,
-                "content": detail.content,
-                "attachments": detail.attachments,
-                "url": detail.url,
-            },
-        }
-    except Exception as e:
-        logger.error(f"Failed to fetch schedule detail: {e}")
-        return {"success": False, "message": f"학사일정 상세 조회 실패: {e}"}
-
-
-@server.tool()
 async def kupid_get_scholarships(page: int = 1, count: int = 20) -> dict[str, Any]:
-    """KUPID 포털의 장학공지 목록을 조회합니다.
+    """KUPID 포털의 장학공지 목록을 조회합니다. (로그인 불필요)
 
     Args:
         page: 페이지 번호 (기본값: 1)
         count: 한 페이지당 항목 수 (기본값: 20)
     """
     try:
-
-        async def _fetch(session):
-            return await fetch_notice_list(session, kind="88", page=page, count=count)
-
-        items = await _with_retry(_fetch)
+        posts, total = await fetch_board_page(BOARD_SCHOLARSHIP, page=page, count=count)
         return {
             "success": True,
-            "count": len(items),
-            "scholarships": _format_items(items, count),
+            "count": len(posts),
+            "total": total,
+            "scholarships": _format_posts(posts),
         }
     except Exception as e:
         logger.error(f"Failed to fetch scholarships: {e}")
@@ -333,98 +489,55 @@ async def kupid_get_scholarships(page: int = 1, count: int = 20) -> dict[str, An
 
 
 @server.tool()
-async def kupid_get_scholarship_detail(
-    scholarship_id: str, message_id: str = ""
-) -> dict[str, Any]:
-    """KUPID 장학공지의 상세 내용을 조회합니다.
+async def kupid_get_scholarship_detail(post_seq: int) -> dict[str, Any]:
+    """KUPID 장학공지의 상세 정보를 조회합니다. (로그인 불필요)
+
+    차세대 포털은 본문 전문에 로그인을 요구하므로 요약과 원문 링크를 제공합니다.
 
     Args:
-        scholarship_id: 장학공지 index (kupid_get_scholarships 결과의 index 필드)
-        message_id: 장학공지 message_id (kupid_get_scholarships 결과의 message_id 필드)
+        post_seq: 장학공지 post_seq (kupid_get_scholarships 결과의 post_seq 필드)
     """
-    try:
-        item = NoticeItem(
-            index=scholarship_id,
-            message_id=message_id,
-            kind="88",
-            title="",
-            date="",
-            writer="",
-        )
-
-        async def _fetch(session):
-            return await fetch_notice_detail(session, item)
-
-        detail = await _with_retry(_fetch)
-        return {
-            "success": True,
-            "scholarship": {
-                "id": detail.id,
-                "title": detail.title,
-                "date": detail.date,
-                "writer": detail.writer,
-                "content": detail.content,
-                "attachments": detail.attachments,
-                "url": detail.url,
-            },
-        }
-    except Exception as e:
-        logger.error(f"Failed to fetch scholarship detail: {e}")
-        return {"success": False, "message": f"장학공지 상세 조회 실패: {e}"}
+    return await _board_detail(BOARD_SCHOLARSHIP, post_seq, "장학공지")
 
 
 @server.tool()
 async def kupid_search(
     keyword: str, board: str = "all", count: int = 20
 ) -> dict[str, Any]:
-    """KUPID 포털에서 키워드로 공지사항/학사일정/장학공지를 검색합니다.
+    """KUPID 포털 게시판에서 키워드로 검색합니다. (로그인 불필요)
 
-    제목에 키워드가 포함된 항목을 반환합니다.
+    제목 또는 요약에 키워드가 포함된 항목을 반환합니다.
+    학사일정은 게시판이 아니므로 kupid_get_schedules를 사용하세요.
 
     Args:
         keyword: 검색할 키워드
-        board: 검색 대상 ("all", "notice", "schedule", "scholarship")
+        board: 검색 대상 ("all", "notice", "scholarship")
         count: 최대 결과 수 (기본값: 20)
     """
     try:
         boards = {
-            "notice": "11",
-            "schedule": "89",
-            "scholarship": "88",
+            "notice": BOARD_NOTICE,
+            "scholarship": BOARD_SCHOLARSHIP,
         }
         if board == "all":
-            targets = boards.items()
+            target_ids = list(boards.values())
         elif board in boards:
-            targets = [(board, boards[board])]
+            target_ids = [boards[board]]
         else:
             return {
                 "success": False,
-                "message": f"잘못된 board: {board}. all/notice/schedule/scholarship 중 선택",
+                "message": f"잘못된 board: {board}. all/notice/scholarship 중 선택",
             }
 
-        results = []
-        kw_lower = keyword.lower()
+        matches = await search_boards(keyword, target_ids, limit=MAX_LIST_SIZE)
+        results = [
+            {
+                "board": BOARD_NAMES.get(board_id, str(board_id)),
+                **_format_posts([post])[0],
+            }
+            for board_id, post in matches[:count]
+        ]
 
-        for board_name, kind in targets:
-
-            async def _fetch(session, k=kind):
-                return await fetch_notice_list(session, kind=k)
-
-            items = await _with_retry(_fetch)
-            for item in items:
-                if kw_lower in item.title.lower():
-                    results.append(
-                        {
-                            "board": board_name,
-                            "index": item.index,
-                            "message_id": item.message_id,
-                            "title": item.title,
-                            "date": item.date,
-                            "writer": item.writer,
-                        }
-                    )
-
-        results = results[:count]
         return {
             "success": True,
             "keyword": keyword,
@@ -507,40 +620,34 @@ async def kupid_get_library_seats(library_name: str = "") -> dict[str, Any]:
 
 @server.tool()
 async def kupid_get_timetable(
-    day: str = "all", ics_export: bool = False
+    day: str = "all", ics_export: bool = False, year: str = "", semester: str = ""
 ) -> dict[str, Any]:
-    """개인 수업시간표를 조회합니다 (SSO 로그인 필요).
-
-    포털 메인 페이지의 시간표 위젯 데이터를 파싱합니다.
+    """개인 수업시간표를 조회합니다 (AMS 2차 인증 필요).
 
     Args:
-        day: 요일 ("all"=전체, "mon"/"tue"/"wed"/"thu"/"fri")
+        day: 요일 ("all"=전체, "mon"/"tue"/"wed"/"thu"/"fri"/"sat")
         ics_export: True이면 ICS 캘린더 파일 내용도 포함
+        year: 학년도 (기본값: 현재 학기)
+        semester: 학기 ("1" 또는 "2")
     """
     try:
-        day_map = {"mon": 1, "tue": 2, "wed": 3, "thu": 4, "fri": 5}
+        session = await _get_ams_session()
+        term = await _resolve_ams_term(session, year, semester)
+        grid = await ams.fetch_timetable(session, term)
+        entries = _grid_to_entries(grid)
 
-        if day == "all":
-
-            async def _fetch(session):
-                return await fetch_full_timetable(session)
-
-            entries = await _with_retry(_fetch)
-        elif day in day_map:
-            d = day_map[day]
-
-            async def _fetch_day(session, d=d):
-                return await fetch_timetable_day(session, d)
-
-            entries = await _with_retry(_fetch_day)
-        else:
-            return {
-                "success": False,
-                "message": f"잘못된 요일: {day}. all/mon/tue/wed/thu/fri 중 선택",
-            }
+        if day != "all":
+            if day not in _DAY_LABELS:
+                return {
+                    "success": False,
+                    "message": f"잘못된 day: {day}. all/mon/tue/wed/thu/fri/sat 중 선택",
+                }
+            entries = [e for e in entries if e.day_of_week == _DAY_LABELS[day]]
 
         result = {
             "success": True,
+            "term": term,
+            "day": day,
             "count": len(entries),
             "timetable": [
                 {
@@ -554,13 +661,8 @@ async def kupid_get_timetable(
                 for e in entries
             ],
         }
-
-        if not entries:
-            result["message"] = "등록된 수업이 없습니다"
-
-        if ics_export and entries:
-            result["ics_content"] = timetable_to_ics(entries)
-
+        if ics_export:
+            result["ics"] = timetable_to_ics(entries)
         return result
     except Exception as e:
         logger.error(f"Failed to fetch timetable: {e}")
@@ -573,85 +675,44 @@ async def kupid_get_timetable(
 
 
 @server.tool()
-async def kupid_search_courses(
-    year: str = "",
-    semester: str = "",
-    college: str = "",
-    department: str = "",
-    campus: str = "1",
-    is_grad: bool = False,
-) -> dict[str, Any]:
-    """개설과목을 검색합니다 (SSO 로그인 필요).
+async def kupid_search_courses(subject: str, campus: str = "") -> dict[str, Any]:
+    """교과목명으로 개설과목을 검색합니다 (AMS 2차 인증 필요).
 
-    학과/단과대별로 개설된 과목을 조회합니다.
-    단과대 코드가 비어있으면 사용 가능한 단과대 목록을 반환합니다.
+    학수번호, 분반, 강의실, 건물, 캠퍼스를 반환합니다. 학사 시스템이 제공하는
+    검색 조건이 교과목명뿐이라, 단과대/학과 단위 목록 조회는 지원하지 않습니다.
 
     Args:
-        year: 학년도 (기본값: 현재 학기 기준 자동 선택)
-        semester: 학기 ("1"=1학기, "2"=2학기, "summer"=여름학기, "winter"=겨울학기)
-        college: 단과대/대학원 코드 (예: 학부 "5720"=정보대학, 대학원 "7298"=SW·AI융합대학원)
-        department: 학과 코드 (예: 학부 "5722"=컴퓨터학과, 대학원 "7313"=인공지능융합학과)
-        campus: 캠퍼스 ("1"=서울, "2"=세종)
-        is_grad: True면 대학원(LecGradMajorSub.jsp), False면 학부(LecMajorSub.jsp)
+        subject: 교과목명 키워드 (필수, 부분일치)
+        campus: 캠퍼스로 필터링 (예: "자연계", "인문사회계")
     """
     try:
-        year, semester = resolve_year_semester(year, semester)
-        codes = GRAD_COLLEGE_CODES if is_grad else COLLEGE_CODES
-        scope = "대학원" if is_grad else "학부"
-
-        if not college:
+        if not subject.strip():
             return {
-                "success": True,
-                "message": f"{scope} 단과대 코드를 선택해주세요",
-                "scope": scope,
-                "colleges": [{"code": c, "name": n} for c, n in codes.items()],
+                "success": False,
+                "message": "교과목명 키워드(subject)는 필수입니다.",
             }
 
-        if not department:
+        session = await _get_ams_session()
+        rows = await ams.fetch_room_guide(session, subject.strip())
 
-            async def _fetch_depts(session, col=college, _grad=is_grad):
-                return await fetch_departments(
-                    session, col, year, semester, is_grad=_grad
-                )
+        if campus:
+            rows = [r for r in rows if campus in (r.get("buldCampsDivNm") or "")]
 
-            depts = await _with_retry(_fetch_depts)
-            college_name = codes.get(college, college)
-            return {
-                "success": True,
-                "message": f"{college_name}의 학과를 선택해주세요",
-                "scope": scope,
-                "college": college_name,
-                "departments": depts,
-            }
-
-        async def _fetch_courses(session, _grad=is_grad):
-            fn = search_grad_courses if _grad else search_courses
-            return await fn(
-                session,
-                year=year,
-                semester=semester,
-                campus=campus,
-                college=college,
-                department=department,
-            )
-
-        courses = await _with_retry(_fetch_courses)
         return {
             "success": True,
-            "scope": scope,
-            "count": len(courses),
+            "keyword": subject,
+            "count": len(rows),
             "courses": [
                 {
-                    "campus": c.campus,
-                    "course_code": c.course_code,
-                    "section": c.section,
-                    "course_type": c.course_type,
-                    "course_name": c.course_name,
-                    "professor": c.professor,
-                    "credits": c.credits,
-                    "schedule": c.schedule,
+                    "course_code": r.get("sbjtnb") or "",
+                    "section": r.get("dvcno") or "",
+                    "course_name": r.get("subjtNm") or "",
+                    "classroom": r.get("lecrmNm") or "",
+                    "building": r.get("buldDivNm") or "",
+                    "campus": r.get("buldCampsDivNm") or "",
+                    "dept_code": r.get("estblDeprtCd") or "",
                 }
-                for c in courses
+                for r in rows
             ],
         }
     except Exception as e:
@@ -661,177 +722,99 @@ async def kupid_search_courses(
 
 @server.tool()
 async def kupid_room_schedule(
-    building: str,
-    room: str = "",
-    day: str = "",
-    year: str = "",
-    semester: str = "",
-    campus: str = "1",
-    include_grad: bool = True,
+    subject: str, building: str = "", room: str = ""
 ) -> dict[str, Any]:
-    """건물/강의실의 정규 수업 시간표를 조회합니다 (학부+대학원 통합, SSO 로그인 필요).
+    """교과목명으로 강의실을 조회합니다 (AMS 2차 인증 필요).
 
-    "이 강의실 오늘 비어있나?" 확인용. 학부 22개 + 대학원 38개 단과대를 병렬 호출하므로
-    호출당 30~60초 소요 (총 800+ 학과 fan-out). 같은 학기는 자주 안 바뀌니 결과를
-    호출 측에서 캐싱 권장.
-
-    한계:
-    - 학사 시스템에 등록된 정규 수업만 잡힘
-    - 학회·세미나·임시 행사 등 비정규 점유는 별도 (spacek.korea.ac.kr 시스템 영역)
+    학사 시스템의 강의실안내조회는 교과목명 키워드로만 검색할 수 있어,
+    "이 강의실에 무슨 수업이 있나"가 아니라 "이 과목이 어느 강의실인가"를 답합니다.
+    건물·호실은 결과를 좁히는 필터로 쓰입니다.
 
     Args:
-        building: 건물명 부분일치 (예: "애기능" → "애기능생활관" 매치)
-        room: 호실 부분일치 (예: "301" → "301호" / "B301"). 비우면 건물 전체.
-        day: 요일 필터 ("월"/"화"/.../"토"/"일"). 비우면 전 요일.
-        year: 학년도 (기본값: 현재 학기 기준 자동)
-        semester: 학기 ("1","2","summer","winter")
-        campus: "1"=서울, "2"=세종
-        include_grad: True(기본)면 대학원도 검색, False면 학부만
+        subject: 교과목명 키워드 (필수, 부분일치)
+        building: 건물명으로 결과 필터링 (예: "정보통신관")
+        room: 강의실명으로 결과 필터링 (예: "604")
     """
     try:
-        year_resolved, semester_resolved = resolve_year_semester(year, semester)
-
-        async def _find(session):
-            return await find_room_schedule(
-                session,
-                building=building,
-                room=room,
-                day=day,
-                year=year_resolved,
-                semester=semester_resolved,
-                campus=campus,
-                include_grad=include_grad,
-            )
-
-        entries = await _with_retry(_find)
-        return {
-            "success": True,
-            "year": year_resolved,
-            "semester": semester_resolved,
-            "building": building,
-            "room": room,
-            "day": day or "전체",
-            "scope": "학부+대학원" if include_grad else "학부",
-            "count": len(entries),
-            "entries": [
-                {
-                    "day": e.day,
-                    "periods": e.periods,
-                    "start_time": e.start_time,
-                    "end_time": e.end_time,
-                    "course_code": e.course_code,
-                    "section": e.section,
-                    "course_name": e.course_name,
-                    "professor": e.professor,
-                    "department": e.department,
-                    "college": e.college,
-                    "source": e.source,
-                    "location": e.location,
-                }
-                for e in entries
-            ],
-            "note": (
-                "정규 수업만 표시됩니다. 학회/세미나 등 비정규 점유는 spacek.korea.ac.kr 별도 확인."
-            ),
-        }
-    except Exception as e:
-        logger.error(f"Failed to lookup room schedule: {e}")
-        return {"success": False, "message": f"강의실 시간표 조회 실패: {e}"}
-
-
-@server.tool()
-async def kupid_get_syllabus(
-    course_code: str,
-    section: str = "00",
-    year: str = "",
-    semester: str = "",
-) -> dict[str, Any]:
-    """강의계획서를 조회합니다 (SSO 로그인 필요).
-
-    Args:
-        course_code: 학수번호 (예: "COSE101")
-        section: 분반 (예: "02")
-        year: 학년도 (기본값: 현재 학기 기준 자동 선택)
-        semester: 학기 ("1"=1학기, "2"=2학기, "summer"=여름학기, "winter"=겨울학기)
-    """
-    try:
-        year, semester = resolve_year_semester(year, semester)
-
-        async def _fetch(session):
-            return await fetch_syllabus(
-                session,
-                course_code=course_code,
-                section=section,
-                year=year,
-                semester=semester,
-            )
-
-        content = await _with_retry(_fetch)
-
-        if not content:
+        if not subject.strip():
             return {
                 "success": False,
-                "message": f"강의계획서를 찾을 수 없습니다: {course_code} (분반 {section})",
+                "message": "교과목명 키워드(subject)는 필수입니다.",
             }
+
+        session = await _get_ams_session()
+        rows = await ams.fetch_room_guide(session, subject.strip())
+
+        if building:
+            rows = [r for r in rows if building in (r.get("buldDivNm") or "")]
+        if room:
+            rows = [r for r in rows if room in (r.get("lecrmNm") or "")]
 
         return {
             "success": True,
-            "course_code": course_code,
-            "section": section,
-            "year": year,
-            "semester": semester,
-            "content": content,
+            "subject": subject,
+            "count": len(rows),
+            "rooms": [
+                {
+                    "course_code": r.get("sbjtnb") or "",
+                    "section": r.get("dvcno") or "",
+                    "course_name": r.get("subjtNm") or "",
+                    "classroom": r.get("lecrmNm") or "",
+                    "building": r.get("buldDivNm") or "",
+                    "campus": r.get("buldCampsDivNm") or "",
+                    "room_type": r.get("lecrmDivNm") or "",
+                    "dept_code": r.get("estblDeprtCd") or "",
+                }
+                for r in rows
+            ],
         }
     except Exception as e:
-        logger.error(f"Failed to fetch syllabus: {e}")
-        return {"success": False, "message": f"강의계획서 조회 실패: {e}"}
+        logger.error(f"Failed to fetch room guide: {e}")
+        return {"success": False, "message": f"강의실 조회 실패: {e}"}
 
 
 # ──────────────────────────────────────────────
-# New: My enrolled courses (infodepot)
+# 학사 시스템(AMS) 조회 — 2차 보안인증 필요
 # ──────────────────────────────────────────────
 
 
 @server.tool()
 async def kupid_my_courses(year: str = "", semester: str = "") -> dict[str, Any]:
-    """내 수강신청 내역을 조회합니다 (SSO 로그인 필요).
+    """내 수강신청 내역을 조회합니다 (AMS 2차 인증 필요).
 
     학수번호, 강의시간, 강의실, 교수, 학점, 이수구분 등 상세 정보를 반환합니다.
     대학원 과목도 포함됩니다.
 
     Args:
         year: 학년도 (기본값: 현재 학기 기준 자동 선택)
-        semester: 학기 ("1"=1학기, "2"=2학기, "summer"=여름학기, "winter"=겨울학기)
+        semester: 학기 ("1"=1학기, "2"=2학기)
     """
     try:
-        year, semester = resolve_year_semester(year, semester)
+        session = await _get_ams_session()
+        term = await _resolve_ams_term(session, year, semester)
+        rows = await ams.fetch_enrollment(session, term)
 
-        async def _fetch(session):
-            return await fetch_my_courses(session, year=year, semester=semester)
-
-        courses, total_credits = await _with_retry(_fetch)
+        courses = [
+            {
+                "course_code": r.get("sbjtnb") or "",
+                "section": r.get("dvcno") or "",
+                "course_name": r.get("subjtNm") or "",
+                "professor": r.get("cgprfNmLisup") or "",
+                "credits": r.get("cdtTime") or "",
+                "course_type": (r.get("cmpsjNm") or "").strip(),
+                "schedule": r.get("lctreTimePlaceLisup") or "",
+                "status": r.get("sttusNm") or "",
+                "payment": r.get("payDt") or "",
+                "dept_code": r.get("estblDeprtCd") or "",
+            }
+            for r in rows
+        ]
         return {
             "success": True,
-            "year": year,
-            "semester": semester,
-            "total_credits": total_credits,
+            "term": term,
             "count": len(courses),
-            "courses": [
-                {
-                    "course_code": c.course_code,
-                    "section": c.section,
-                    "course_type": c.course_type,
-                    "course_name": c.course_name,
-                    "professor": c.professor,
-                    "credits": c.credits,
-                    "schedule": c.schedule,
-                    "retake": c.retake,
-                    "status": c.status,
-                    "grad_code": c.grad_code,
-                    "dept_code": c.dept_code,
-                }
-                for c in courses
-            ],
+            "total_credits": _sum_credits(rows),
+            "courses": courses,
         }
     except Exception as e:
         logger.error(f"Failed to fetch my courses: {e}")
@@ -840,83 +823,52 @@ async def kupid_my_courses(year: str = "", semester: str = "") -> dict[str, Any]
 
 @server.tool()
 async def kupid_get_all_grades(year_term: str = "") -> dict[str, Any]:
-    """전체 성적, 누적 GPA, 취득학점을 조회합니다 (SSO 로그인 필요).
-
-    KUPID 학적/졸업 > 성적사항 > 전체성적조회 화면의 최종 확정 성적을 가져옵니다.
+    """전체 성적, 누적 GPA, 취득학점을 조회합니다 (AMS 2차 인증 필요).
 
     Args:
-        year_term: 조회할 학년도/학기 코드 (예: "20242R"). 비우면 전체 조회
+        year_term: 학년도/학기 코드로 필터 (예: "20261R"). 비우면 전체
     """
     try:
+        session = await _get_ams_session()
+        rows, summary = await ams.fetch_grades(session)
 
-        async def _fetch(session):
-            return await fetch_all_grades(session, year_term=year_term)
+        if year_term:
+            rows = [
+                r for r in rows if f"{r.get('syy')}{r.get('smtDivcd')}" == year_term
+            ]
 
-        page = await _with_retry(_fetch)
-        latest_summary = page.summaries[-1] if page.summaries else None
+        grades = [
+            {
+                "year": r.get("syy") or "",
+                "semester": r.get("smtDivcd") or "",
+                "course_code": r.get("sbjtnb") or "",
+                "section": r.get("dvcno") or "",
+                "course_name": r.get("subjtNm") or "",
+                "course_type": r.get("cmpsjDivNm") or "",
+                "credits": r.get("cdt"),
+                "grade": r.get("gradeGrdDivcd") or "",
+                "grade_point": r.get("cmpsjGp"),
+                "retake_of": r.get("ratlcSyySmtNm") or "",
+            }
+            for r in rows
+        ]
 
+        acmtl = summary[0] if summary else {}
         return {
             "success": True,
-            "year_term": year_term or None,
-            "available_year_terms": page.available_year_terms,
-            "record_count": len(page.records),
-            "records": [
-                {
-                    "year": record.year,
-                    "term": record.term,
-                    "course_code": record.course_code,
-                    "course_name": record.course_name,
-                    "completion_type": record.completion_type,
-                    "course_type": record.course_type,
-                    "credits": record.credits,
-                    "score": record.score,
-                    "grade": record.grade,
-                    "gpa": record.gpa,
-                    "retake_year": record.retake_year,
-                    "retake_term": record.retake_term,
-                    "retake_course": record.retake_course,
-                    "deletion_type": record.deletion_type,
-                }
-                for record in page.records
-            ],
-            "summary_count": len(page.summaries),
-            "summaries": [
-                {
-                    "year": summary.year,
-                    "term": summary.term,
-                    "major_registered_credits": summary.major_registered_credits,
-                    "major_earned_credits": summary.major_earned_credits,
-                    "prerequisite_earned_credits": summary.prerequisite_earned_credits,
-                    "research_earned_credits": summary.research_earned_credits,
-                    "total_grade_points": summary.total_grade_points,
-                    "official_gpa": summary.official_gpa,
-                    "overall_gpa": summary.overall_gpa,
-                    "official_converted_score": summary.official_converted_score,
-                    "rank_for_certificate": summary.rank_for_certificate,
-                }
-                for summary in page.summaries
-            ],
-            "latest_summary": (
-                {
-                    "year": latest_summary.year,
-                    "term": latest_summary.term,
-                    "major_registered_credits": latest_summary.major_registered_credits,
-                    "major_earned_credits": latest_summary.major_earned_credits,
-                    "prerequisite_earned_credits": latest_summary.prerequisite_earned_credits,
-                    "research_earned_credits": latest_summary.research_earned_credits,
-                    "total_grade_points": latest_summary.total_grade_points,
-                    "official_gpa": latest_summary.official_gpa,
-                    "overall_gpa": latest_summary.overall_gpa,
-                    "official_converted_score": latest_summary.official_converted_score,
-                    "rank_for_certificate": latest_summary.rank_for_certificate,
-                }
-                if latest_summary
-                else None
-            ),
+            "count": len(grades),
+            "grades": grades,
+            "summary": {
+                "gpa": acmtl.get("gpa"),
+                "earned_credits": acmtl.get("aplyCdt"),
+                "total_grade_points": acmtl.get("tgp"),
+                "converted_score": acmtl.get("covsnSco"),
+                "major_credits": acmtl.get("cmpsjCdt"),
+            },
         }
     except Exception as e:
-        logger.error(f"Failed to fetch all grades: {e}")
-        return {"success": False, "message": f"전체 성적 조회 실패: {e}"}
+        logger.error(f"Failed to fetch grades: {e}")
+        return {"success": False, "message": f"성적 조회 실패: {e}"}
 
 
 # ──────────────────────────────────────────────
@@ -1529,22 +1481,6 @@ async def kupid_lms_syllabus(
                 or keyword in (c.get("name") or "").upper()
             ]
             if not matched:
-                # Fallback: 학수번호로 infodepot 수강과목에서 과목명 찾아 재매칭
-                try:
-                    session = await _get_session()
-                    enrolled, _ = await fetch_my_courses(session)
-                    enrolled_match = [
-                        e for e in enrolled if keyword == e.course_code.upper()
-                    ]
-                    if enrolled_match:
-                        enroll_name = enrolled_match[0].course_name
-                        matched = [
-                            c for c in courses if enroll_name in (c.get("name") or "")
-                        ]
-                except Exception:
-                    pass
-
-            if not matched:
                 return {
                     "success": False,
                     "message": f"'{course_code}'에 해당하는 수강과목을 찾을 수 없습니다. "
@@ -1575,54 +1511,6 @@ async def kupid_lms_syllabus(
 
         if syllabus_html:
             soup = BeautifulSoup(syllabus_html, "lxml")
-
-            # iframe이 infodepot을 가리키면 직접 fetch하여 구조화된 데이터 반환
-            iframe = soup.find("iframe", src=re.compile(r"infodepot\.korea\.ac\.kr"))
-            if iframe:
-                iframe_src = iframe.get("src", "")
-                from urllib.parse import urlparse
-
-                parsed = urlparse(iframe_src)
-                if parsed.scheme not in ("http", "https") or not parsed.netloc.endswith(
-                    ".korea.ac.kr"
-                ):
-                    raise ValueError(f"Untrusted iframe src: {iframe_src!r}")
-                try:
-                    from .courses import (
-                        _establish_infodepot_session,
-                        parse_syllabus_structured,
-                        INFODEPOT_BASE,
-                    )
-                    from .auth import _BROWSER_HEADERS
-
-                    session = await _get_session()
-                    async with httpx.AsyncClient(
-                        timeout=30.0, follow_redirects=True
-                    ) as client:
-                        await _establish_infodepot_session(client, session)
-                        resp = await client.get(
-                            iframe_src,
-                            headers={
-                                **_BROWSER_HEADERS,
-                                "referer": f"{INFODEPOT_BASE}/lecture/LecMajorSub.jsp",
-                            },
-                        )
-                        html = resp.content.decode("euc-kr", errors="replace")
-                        structured = parse_syllabus_structured(html)
-                        if structured:
-                            return {
-                                "success": True,
-                                "course_id": course_id,
-                                "course_name": course_data.get("name"),
-                                "course_code": course_data.get("course_code"),
-                                "term": course_data.get("term", {}).get("name")
-                                if course_data.get("term")
-                                else None,
-                                "syllabus_url": f"https://mylms.korea.ac.kr/courses/{course_id}/assignments/syllabus",
-                                **structured,
-                            }
-                except Exception as e:
-                    logger.debug(f"Failed to fetch iframe content: {e}")
 
             syllabus_text = soup.get_text(separator="\n", strip=True)
 
