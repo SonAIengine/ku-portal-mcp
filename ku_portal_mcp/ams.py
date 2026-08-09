@@ -8,29 +8,28 @@ AMS는 **2차 보안인증이 필수**라 일반 SSO 로그인만으로는 들�
     start_login()      2차 인증 시작 → 이메일로 코드 발송
     complete_login()   코드 검증 → AMS 세션 확립
 
-인증 단계는 `_ams_auth` 브라우저 헬퍼가 처리한다. 서버가 브라우저 컨텍스트를
-엄격히 검증해, 순수 HTTP로는 OTP를 맞게 넣어도 세션이 승격되지 않기 때문이다.
-인증이 끝나면 쿠키만 넘겨받아 이후 조회는 httpx로 수행한다.
+인증은 브라우저 없이 순수 HTTP로 처리한다. 다만 SSO가 RelayState를 올바른
+형식으로 만들도록 `/exsignon/main/main.jsp` 진입점에서 시작해야 하고, OTP를
+검증한 뒤에도 로그인 폼 재제출 → `sso_identify.jsp` → `j_login_sso.do`를
+차례로 밟아야 AMS 애플리케이션 세션이 선다.
 
 조회 API는 넥사크로 계열 DataSet 규약을 쓴다. 요청에 메뉴/프로그램 식별자를
 그대로 실어야 하고, 조건은 `@d1#<필드>` 형태로 전달한다.
 """
 
-import asyncio
+import base64
 import json
 import logging
 import os
-import re
-import signal
-import subprocess
-import sys
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
+from urllib.parse import urljoin
 
 import httpx
 
-from . import _ams_auth, sso
+from . import sso
+from ._storage import write_secure_json
 
 logger = logging.getLogger(__name__)
 
@@ -38,14 +37,13 @@ AMS_BASE = "https://ams.korea.ac.kr"
 SESSION_CHECK_URL = f"{AMS_BASE}/com/cnst/PropCtr/findViewSession.do"
 
 CACHE_DIR = Path.home() / ".cache" / "ku-portal-mcp"
-AMS_SESSION_FILE = CACHE_DIR / _ams_auth.SESSION_FILE
-HELPER_PID_FILE = CACHE_DIR / "ams_auth.pid"
-
-# 헬퍼 프로세스 식별용 (PID 재사용 오인 방지)
-_HELPER_MODULE = "ku_portal_mcp._ams_auth"
+AMS_SESSION_FILE = CACHE_DIR / "ams_session.json"
+AMS_PENDING_FILE = CACHE_DIR / "ams_pending.json"
 
 # AMS 세션은 서버가 3600초를 알려준다. 여유를 두고 50분만 재사용한다.
 AMS_SESSION_TTL = 50 * 60
+# 인증 코드는 5분간 유효하다. 여유를 둬 그보다 조금 길게 잡는다.
+AMS_PENDING_TTL = 8 * 60
 
 # 메뉴 코드 (포털 메뉴 API에서 확인)
 MENU_ENROLLMENT = "M111422"  # 수강신청조회
@@ -132,9 +130,8 @@ def load_session() -> AmsSession | None:
 
 
 def clear_session() -> None:
-    _stop_helper()
-    for name in (_ams_auth.SESSION_FILE, _ams_auth.STATUS_FILE, _ams_auth.CODE_FILE):
-        (CACHE_DIR / name).unlink(missing_ok=True)
+    for path in (AMS_SESSION_FILE, AMS_PENDING_FILE):
+        path.unlink(missing_ok=True)
 
 
 def make_client(session: AmsSession | None = None, **kwargs) -> httpx.AsyncClient:
@@ -151,83 +148,144 @@ def make_client(session: AmsSession | None = None, **kwargs) -> httpx.AsyncClien
     return client
 
 
-def _stop_helper() -> None:
-    """살아 있는 인증 헬퍼 프로세스를 정리한다.
+def _login_forms(html: str) -> list:
+    """action이 있고 입력이 있는 폼. 로그아웃 계열은 제외한다.
 
-    PID는 재사용되므로, 기록해 둔 PID가 정말 우리 헬퍼인지 확인한 뒤에만 종료한다.
-    확인 없이 kill하면 헬퍼가 이미 끝난 경우 무관한 프로세스를 죽일 수 있다.
+    로그인 직후 페이지에는 로그아웃 폼이 섞여 있어, 아무 폼이나 제출하면
+    방금 세운 세션이 SLO(Single Logout)로 날아간다.
     """
-    if not HELPER_PID_FILE.exists():
-        return
+    from bs4 import BeautifulSoup
 
-    try:
-        pid = int(HELPER_PID_FILE.read_text().strip())
-        cmdline = subprocess.run(
-            ["ps", "-p", str(pid), "-o", "command="],
-            capture_output=True,
-            text=True,
-            timeout=5,
-        ).stdout
-        if _HELPER_MODULE in cmdline:
-            os.kill(pid, signal.SIGTERM)
-    except (OSError, ValueError, subprocess.SubprocessError):
-        pass
-
-    HELPER_PID_FILE.unlink(missing_ok=True)
+    out = []
+    for f in BeautifulSoup(html, "lxml").find_all("form"):
+        action = (f.get("action") or "").lower()
+        if not action or not f.find_all("input"):
+            continue
+        if any(k in action for k in ("logout", "slo", "slores")):
+            continue
+        out.append(f)
+    return out
 
 
-async def _await_status(wanted: set[str], timeout: float) -> dict:
-    """헬퍼가 기록하는 상태 파일을 원하는 상태가 될 때까지 지켜본다."""
-    status_path = CACHE_DIR / _ams_auth.STATUS_FILE
-    deadline = time.time() + timeout
-    while time.time() < deadline:
-        if status_path.exists():
-            try:
-                status = json.loads(status_path.read_text())
-            except json.JSONDecodeError:
-                status = {}
-            if status.get("state") in wanted:
-                return status
-        await asyncio.sleep(1)
-    _stop_helper()
-    raise RuntimeError("인증 절차가 시간 안에 끝나지 않았습니다.")
+def _form_fields(form) -> dict[str, str]:
+    return {
+        i["name"]: (i.get("value") or "")
+        for i in form.find_all("input")
+        if i.get("name")
+    }
+
+
+def _entry_url(menu_id: str) -> str:
+    """AMS의 SSO 진입점.
+
+    반드시 이 경로로 들어가야 SSO가 RelayState를 상대 경로 형식으로 만든다.
+    `Auth.eps`를 직접 부르면 RelayState가 절대 URL이 되고, 서버가 리다이렉트
+    주소를 `base + RelayState`로 이어붙이는 탓에 호스트가 겹친 깨진 URL이 나온다.
+    """
+    target = f"{AMS_BASE}?menuId={menu_id}&isPc=true"
+    token = base64.b64encode(target.encode()).decode().rstrip("=")
+    return f"{AMS_BASE}/exsignon/main/main.jsp?RelayState={token}"
+
+
+async def _follow_forms(client: httpx.AsyncClient, resp, hops: int = 8):
+    """자동 제출 폼 체인을 따라가되 로그인 폼에서 멈춘다."""
+    for _ in range(hops):
+        forms = _login_forms(resp.text)
+        if not forms:
+            return resp
+        form = forms[0]
+        if form.find("input", {"id": "ipt_id"}) or form.find(
+            "input", {"name": "user_password"}
+        ):
+            return resp  # 자격증명을 넣어야 하는 폼
+        resp = await client.post(
+            urljoin(str(resp.url), form["action"]),
+            data=_form_fields(form),
+            headers={"user-agent": sso._UA},
+        )
+    return resp
 
 
 async def start_login(menu_id: str = MENU_ENROLLMENT) -> str:
     """2차 인증을 시작해 이메일로 인증 코드를 보낸다. 마스킹된 수신 주소를 반환한다.
 
-    AMS는 순수 HTTP 요청으로는 OTP를 맞게 넣어도 세션이 승격되지 않아,
-    이 단계만 브라우저 헬퍼에 맡긴다. 헬퍼는 사용자가 코드를 넣을 때까지
-    살아 있어야 하므로 별도 프로세스로 띄우고 파일로 신호를 주고받는다.
+    브라우저 없이 순수 HTTP로 처리한다. 이어지는 `complete_login()`이 같은
+    세션을 써야 하므로, 쿠키와 2차 인증 폼 필드를 디스크에 남긴다.
     """
-    if not os.environ.get("KU_PORTAL_ID") or not os.environ.get("KU_PORTAL_PW"):
+    user_id = os.environ.get("KU_PORTAL_ID")
+    password = os.environ.get("KU_PORTAL_PW")
+    if not user_id or not password:
         raise RuntimeError(
             "KU_PORTAL_ID / KU_PORTAL_PW 환경변수가 설정되지 않았습니다."
         )
 
-    _stop_helper()
-    for name in (_ams_auth.STATUS_FILE, _ams_auth.CODE_FILE):
-        (CACHE_DIR / name).unlink(missing_ok=True)
-    CACHE_DIR.mkdir(parents=True, exist_ok=True)
+    async with make_client() as client:
+        resp = await client.get(
+            _entry_url(menu_id), headers={"user-agent": sso._UA, "accept": "text/html"}
+        )
+        resp = await _follow_forms(client, resp)
 
-    process = subprocess.Popen(
-        [sys.executable, "-m", _HELPER_MODULE, str(CACHE_DIR)],
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.PIPE,
-        cwd=str(Path(__file__).resolve().parent.parent),
-    )
-    HELPER_PID_FILE.write_text(str(process.pid))
+        page = sso.parse_login_page(resp.text, str(resp.url))
+        resp = await sso.submit_login(client, page, user_id, password)
+        if "sso_option_change" not in resp.text:
+            raise RuntimeError(
+                f"2차 인증 화면에 도달하지 못했습니다 (위치: {resp.url}). "
+                "ID/비밀번호를 확인하세요."
+            )
 
-    status = await _await_status({"code_sent", "error"}, timeout=120)
-    if status.get("state") == "error":
-        raise RuntimeError(status.get("message") or "인증을 시작하지 못했습니다.")
+        from bs4 import BeautifulSoup
 
-    # 발송 안내 문구에 마스킹된 주소가 실려 온다
-    for message in status.get("dialogs") or []:
-        found = re.search(r"[\w.*-]+@[\w.*-]+", message)
-        if found:
-            return found.group(0)
-    return ""
+        form = BeautifulSoup(resp.text, "lxml").find(id="sso_option_change")
+        if form is None:
+            raise RuntimeError("2차 인증 폼을 찾지 못했습니다.")
+
+        ajax = {
+            "user-agent": sso._UA,
+            "origin": sso.SSO_BASE,
+            "referer": str(resp.url),
+            "x-requested-with": "XMLHttpRequest",
+            "accept": "application/json",
+        }
+        # 이메일 OTP 수단으로 전환한 뒤 코드를 발송한다. 둘 다 바디가 없고
+        # 서버는 세션 쿠키로 사용자를 식별한다.
+        masked = await client.post(sso.EMAIL_MASKING_URL, headers=ajax)
+        sent = await client.post(sso.IOP_OTP_REQ_URL, headers=ajax)
+        try:
+            result = sent.json()
+        except ValueError as e:
+            raise RuntimeError(f"OTP 요청 응답이 JSON이 아닙니다: {e}") from e
+        if result.get("returnCode") != "0000":
+            raise RuntimeError(
+                result.get("returnMessage") or "인증 코드를 보내지 못했습니다."
+            )
+
+        CACHE_DIR.mkdir(parents=True, exist_ok=True)
+        write_secure_json(
+            AMS_PENDING_FILE,
+            {
+                "cookies": [
+                    {
+                        "name": c.name,
+                        "value": c.value,
+                        "domain": c.domain,
+                        "path": c.path,
+                    }
+                    for c in client.cookies.jar
+                ],
+                "fields": _form_fields(form),
+                "referer": str(resp.url),
+                "menu_id": menu_id,
+                "created_at": time.time(),
+            },
+        )
+
+    address = result.get("maskEmail") or ""
+    if not address:
+        try:
+            address = masked.json().get("maskEmail", "")
+        except ValueError:
+            address = ""
+    return address
 
 
 async def complete_login(code: str) -> AmsSession:
@@ -236,24 +294,93 @@ async def complete_login(code: str) -> AmsSession:
     if len(code) != 6 or not code.isdigit():
         raise RuntimeError("인증 코드는 6자리 숫자여야 합니다.")
 
-    status_path = CACHE_DIR / _ams_auth.STATUS_FILE
-    if not status_path.exists():
+    pending = _load(AMS_PENDING_FILE, AMS_PENDING_TTL)
+    if not pending:
         raise RuntimeError(
-            "진행 중인 인증이 없습니다. kupid_ams_auth_start()로 다시 시작하세요."
+            "진행 중인 인증이 없거나 만료됐습니다. "
+            "kupid_ams_auth_start()로 다시 시작하세요."
         )
 
-    (CACHE_DIR / _ams_auth.CODE_FILE).write_text(code)
-    status = await _await_status({"done", "error"}, timeout=180)
-    _stop_helper()
+    session = AmsSession(cookies=pending["cookies"])
+    async with make_client(session) as client:
+        ajax = {
+            "user-agent": sso._UA,
+            "origin": sso.SSO_BASE,
+            "referer": pending["referer"],
+            "x-requested-with": "XMLHttpRequest",
+            "accept": "application/json",
+        }
+        resp = await client.post(
+            sso.IOP_OTP_VERIFY_URL,
+            data={"cert_no": code, "div": "scnd"},
+            headers=ajax,
+        )
+        try:
+            result = resp.json()
+        except ValueError as e:
+            raise RuntimeError(f"OTP 검증 응답이 JSON이 아닙니다: {e}") from e
+        if result.get("returnCode") != "0000":
+            raise RuntimeError(
+                result.get("returnMessage") or "인증 코드가 올바르지 않습니다."
+            )
 
-    if status.get("state") == "error":
-        raise RuntimeError(status.get("message") or "인증에 실패했습니다.")
+        # 인증을 마친 뒤 로그인 폼을 다시 제출해야 SSO 세션이 선다.
+        # 비밀번호는 폼에 이미 암호화된 채로 들어 있어 재암호화하지 않는다.
+        resp = await client.post(
+            sso.LOGIN_URL,
+            data=pending["fields"],
+            headers={
+                "user-agent": sso._UA,
+                "origin": sso.SSO_BASE,
+                "referer": pending["referer"],
+                "content-type": "application/x-www-form-urlencoded",
+                "accept": "text/html",
+            },
+        )
+        if "ssosession" not in client.cookies:
+            raise RuntimeError("2차 인증은 통과했지만 SSO 세션이 서지 않았습니다.")
 
-    session = load_session()
-    if not session:
-        raise RuntimeError("인증은 끝났지만 세션을 읽지 못했습니다.")
+        # SSO 티켓을 AMS로 넘긴다 (RelayState는 상대 경로).
+        forms = _login_forms(resp.text)
+        if not forms:
+            raise RuntimeError("AMS로 넘어가는 폼을 찾지 못했습니다.")
+        resp = await client.post(
+            urljoin(str(resp.url), forms[0]["action"]),
+            data=_form_fields(forms[0]),
+            headers={"user-agent": sso._UA},
+        )
+
+        # 티켓만으로는 부족하고, 이 경로를 밟아야 AMS 애플리케이션 세션이 선다.
+        menu_id = pending.get("menu_id") or MENU_ENROLLMENT
+        target = f"{AMS_BASE}?menuId={menu_id}&isPc=true"
+        token = base64.b64encode(target.encode()).decode().rstrip("=")
+        for url in (
+            f"{AMS_BASE}/com/lgin/SsoCtr/j_login_sso.do?addParam={token}",
+            f"{AMS_BASE}/?menuId={menu_id}&isPc=true",
+            f"{AMS_BASE}/com/lgin/SsoCtr/initPageWork.do"
+            f"?requestTimeStr={int(time.time() * 1000)}&menuId={menu_id}&isPc=true",
+        ):
+            await client.get(url, headers={"user-agent": sso._UA})
+
+        established = AmsSession(
+            cookies=[
+                {"name": c.name, "value": c.value, "domain": c.domain, "path": c.path}
+                for c in client.cookies.jar
+                if "ams.korea" in (c.domain or "")
+            ],
+            created_at=time.time(),
+        )
+
+    if not await verify_session(established):
+        raise RuntimeError("인증은 끝났지만 AMS 세션이 확립되지 않았습니다.")
+
+    write_secure_json(
+        AMS_SESSION_FILE,
+        {"cookies": established.cookies, "created_at": established.created_at},
+    )
+    AMS_PENDING_FILE.unlink(missing_ok=True)
     logger.info("AMS login successful")
-    return session
+    return established
 
 
 async def verify_session(session: AmsSession) -> bool:

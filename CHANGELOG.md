@@ -31,6 +31,32 @@
 > 업그레이드 방법은 [README의 "업데이트"](README.md#업데이트)를 참고하세요.
 > **uvx 사용자는 캐시 때문에 재시작만으로는 갱신되지 않습니다** (`uv cache clean ku-portal-mcp` 필요).
 
+## [0.18.0] - 2026-08-10
+
+### 변경
+- **AMS 2차 보안인증을 순수 HTTP로 재구현.** `playwright`와 Chromium(수백 MB)
+  설치가 더 이상 필요 없습니다. `uvx ku-portal-mcp` 한 줄로 **31개 tool 전부**가
+  동작합니다.
+
+  v0.16.0에서는 "서버가 브라우저 컨텍스트를 검증해 HTTP로는 세션이 승격되지
+  않는다"고 판단해 이 단계만 헤드리스 브라우저에 맡겼습니다. 실제 원인은 네 가지
+  절차를 빠뜨린 것이었습니다.
+
+  | 함정 | 내용 |
+  |---|---|
+  | 진입점 | `/exsignon/main/main.jsp?RelayState=<base64>`로 들어가야 SSO가 RelayState를 **상대 경로**로 만든다. `Auth.eps`를 직접 부르면 절대 URL이 되고, 서버가 리다이렉트 주소를 `base + RelayState`로 이어붙여 호스트가 겹친 깨진 URL(`https://ams.korea.ac.krhttps://ams.korea.ac.kr/...`)이 나온다 |
+  | 로그아웃 폼 | 로그인 직후 페이지에 로그아웃 폼이 섞여 있어, 자동 추적이 이를 제출하면 방금 세운 세션이 `SLO.eps`로 날아간다 |
+  | `sso_identify.jsp` | OTP 검증 후 로그인 폼을 재제출한 응답에 들어 있는 이 폼을 반드시 제출해야 한다 |
+  | `j_login_sso.do` | SSO 티켓만으로는 부족하고, 이 경로를 밟아야 AMS **애플리케이션** 세션이 선다 |
+
+  OTP 발송(`IOPOtpReq.eps`)과 검증(`IOPOtpVerify.eps`)은 요청 바디 없이 세션
+  쿠키만으로 동작합니다. 사용자 경험은 그대로입니다 — 인증 시작 → 메일로 온
+  6자리 코드 입력 → 50분간 세션 유지.
+
+### 제거
+- `ku_portal_mcp/_ams_auth.py` (브라우저 헬퍼, 220줄)
+- `[ams]` optional dependency (`playwright`)
+
 ## [0.17.2] - 2026-08-07
 
 ### 수정

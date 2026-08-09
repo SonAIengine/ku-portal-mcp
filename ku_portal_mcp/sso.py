@@ -38,6 +38,7 @@ USER_ID_CHK_URL = f"{SSO_BASE}/korea/UserIdChk.eps"
 IOP_USER_STATUS_URL = f"{SSO_BASE}/korea/auth/IOPUserStatusChk.eps"
 IOP_PUSH_AUTH_URL = f"{SSO_BASE}/korea/auth/IOPPushAuth.eps"
 IOP_AUTH_CHK_URL = f"{SSO_BASE}/korea/auth/IOPAuthChk.eps"
+EMAIL_MASKING_URL = f"{SSO_BASE}/korea/EmailMasking.eps"
 IOP_OTP_REQ_URL = f"{SSO_BASE}/korea/auth/IOPOtpReq.eps"
 IOP_OTP_VERIFY_URL = f"{SSO_BASE}/korea/auth/IOPOtpVerify.eps"
 
