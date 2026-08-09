@@ -23,4 +23,4 @@
 - PyPI 토큰: `~/.pypirc`에 설정됨
 - 버전 올릴 때 pyproject.toml의 version 수정
 - dist/ 비우고 빌드 후 배포: `rm -rf dist && hatch build && twine upload dist/*`
-- MCP 런타임 경로: `~/.claude/mcp-servers/ku-portal-mcp/` (git repo 아님)
+- 배포 후 uv 캐시 갱신: `uv cache clean ku-portal-mcp` → Claude Code 재시작
