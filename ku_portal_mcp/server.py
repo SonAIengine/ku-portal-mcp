@@ -16,6 +16,7 @@ import re
 import sys
 import logging
 from dataclasses import asdict
+from datetime import date
 from pathlib import Path
 from typing import Any
 
@@ -723,6 +724,135 @@ async def kupid_search_courses(subject: str, campus: str = "") -> dict[str, Any]
     except Exception as e:
         logger.error(f"Failed to search courses: {e}")
         return {"success": False, "message": f"개설과목 검색 실패: {e}"}
+
+
+def _resolve_syllabus_term(
+    year: str, semester: str, today: date | None = None
+) -> tuple[str, str]:
+    """학년도와 AMS 학기 코드(1R/2R)를 정한다.
+
+    계절학기에는 강의계획서가 없다시피 하므로, 방학 중이면 다가오는 정규
+    학기로 넘긴다(여름 → 그 해 2학기, 겨울 → 다음 학년도 1학기). 호출자가
+    "1R" 같은 코드를 직접 주면 그대로 쓴다.
+    """
+    resolved_year, resolved_semester = resolve_year_semester(
+        year or None, semester or None, today=today
+    )
+
+    if resolved_semester == "summer":
+        return resolved_year, "2R"
+    if resolved_semester == "winter":
+        return str(int(resolved_year) + 1), "1R"
+
+    return resolved_year, {"1": "1R", "2": "2R"}.get(
+        resolved_semester, resolved_semester
+    )
+
+
+@server.tool()
+async def kupid_syllabus(
+    course_code: str,
+    year: str = "",
+    semester: str = "",
+    section: str = "00",
+    grad_dept: str = "",
+) -> dict[str, Any]:
+    """학수번호로 강의계획서를 조회합니다 (로그인 불필요).
+
+    평가 비중(중간/기말/과제 %), 주차별 강의계획, 교재·참고문헌, 성적평가
+    방식(절대/상대), 강의시간·강의실, 담당교수 연락처를 반환합니다.
+
+    Args:
+        course_code: 학수번호 (예: "AAI117", "BDC108")
+        year: 학년도 (기본: 현재 학년도)
+        semester: 학기 "1" 또는 "2" (기본: 현재 또는 다가오는 정규학기)
+        section: 분반 (기본 "00")
+        grad_dept: 대학원 코드 (기본: SW·AI융합대학원 7298)
+    """
+    try:
+        code = course_code.strip().upper()
+        if not code:
+            return {"success": False, "message": "학수번호(course_code)는 필수입니다."}
+
+        syy, term = _resolve_syllabus_term(year, semester)
+        result = await ams.fetch_syllabus(
+            code,
+            syy,
+            term,
+            section=section or "00",
+            grad_dept=grad_dept or ams.GSCIT_GRAD_DEPT,
+        )
+
+        if result is None:
+            return {
+                "success": False,
+                "message": (
+                    f"{syy}학년도 {term} {code} 과목을 찾을 수 없습니다. "
+                    "미개설이거나 대학원 코드(grad_dept)가 다를 수 있습니다."
+                ),
+            }
+
+        base = result["base"]
+        evaluation = [
+            {"item": r.get("evlItemCtnt") or "", "percent": r.get("evlSco") or 0}
+            for r in result["evaluation"]
+        ]
+
+        return {
+            "success": True,
+            "course_code": base.get("sbjtnb") or code,
+            "course_name": base.get("subjtNm") or "",
+            "year": syy,
+            "semester": term,
+            "section": base.get("dvcno") or section,
+            "credits": base.get("cdt"),
+            "category": (base.get("cmpsjNm") or "").strip(),
+            "department": base.get("estblDeprtNm") or "",
+            "schedule": base.get("lctreTimePlaceLisup") or "",
+            "professor": {
+                "name": base.get("per001KorNm") or "",
+                "email": base.get("per001EmailAddr") or "",
+                "department": base.get("per001DeptNm") or "",
+                "office": base.get("per001WorkPlace") or "",
+                "office_hours": base.get("cnslgPosblTimeDesc") or "",
+                "homepage": base.get("per001Homepage") or "",
+            },
+            "grading_method": base.get("gradeEvlMthdNm") or "",
+            "grading_note": base.get("gradeEvlMthdDesc") or "",
+            "evaluation": evaluation,
+            "evaluation_total": sum(e["percent"] for e in evaluation),
+            "goal": base.get("lrnGoalCtnt") or "",
+            "outline": base.get("profSylblCtnt") or "",
+            "prerequisites": base.get("atnlcRqistCtnt") or "",
+            "textbook": base.get("txtbkCtnt") or "",
+            "references": [
+                {
+                    "title": r.get("referBookNm") or "",
+                    "publisher": r.get("pblcmNm") or "",
+                    "isbn": r.get("isbnVal") or "",
+                }
+                for r in result["references"]
+            ],
+            "weekly": [
+                {
+                    "week": r.get("lessnWkOdr"),
+                    "content": (r.get("lctreCtnt") or "").strip(),
+                    "midterm": r.get("mdtexOprtYn") == "1",
+                    "final": r.get("fnlexOprtYn") == "1",
+                }
+                for r in result["weekly"]
+            ],
+            "note": (
+                "" if evaluation else "담당교수가 아직 평가 비중을 등록하지 않았습니다."
+            ),
+        }
+    except Exception as e:
+        logger.error(f"Failed to fetch syllabus: {e!r}")
+        # 네트워크 예외는 메시지가 비어 오는 일이 있어 타입을 함께 남긴다.
+        return {
+            "success": False,
+            "message": f"강의계획서 조회 실패: {type(e).__name__}: {e}",
+        }
 
 
 @server.tool()

@@ -99,6 +99,28 @@ API_GRADES = AmsApi(
     "dsGradeAll",
 )
 
+# 강의계획서는 로그인 없이 열린다. 다만 기본정보와 세부내용이 API가 나뉘어
+# 있어, 기본정보만 보고 "계획서가 비었다"고 판단하면 틀린다. 배점 필드
+# (tb1000~tbTot)는 계획서가 채워진 과목에서도 늘 0으로 내려온다.
+API_SYLLABUS_INFO = AmsApi(
+    "/sch/sles/SleslcCtr/findAllLctreSyllaRegPopList.do",
+    "MzMzODYzMjY=",
+    "",
+    "MTg3NDA2",
+    "dsSles361",
+)
+# 평가항목·주차별 계획·참고문헌이 여기 담긴다.
+API_SYLLABUS_PLAN = AmsApi(
+    "/sch/sles/SleslcCtr/findAllLctreSyllaPopLrnPlanList.do",
+    "MzMzODYzMjY=",
+    "",
+    "MTg3NDA2",
+    "dsSles366",
+)
+
+# SW·AI융합대학원. 대학원 코드는 소속 대학원마다 다르다.
+GSCIT_GRAD_DEPT = "7298"
+
 
 @dataclass
 class AmsSession:
@@ -396,8 +418,12 @@ async def verify_session(session: AmsSession) -> bool:
         return False
 
 
-async def query_raw(session: AmsSession, api: AmsApi, **conditions: str) -> dict:
-    """AMS 조회 API를 호출해 응답 전체(여러 DataSet)를 반환한다."""
+async def query_raw(session: AmsSession | None, api: AmsApi, **conditions: str) -> dict:
+    """AMS 조회 API를 호출해 응답 전체(여러 DataSet)를 반환한다.
+
+    세션 없이(``None``) 부를 수 있다. 강의계획서처럼 인증이 필요 없는
+    조회가 있다.
+    """
     payload = {
         "_menuId": api.menu_id,
         "_menuNm": api.menu_name,
@@ -465,3 +491,54 @@ async def fetch_grades(session: AmsSession) -> tuple[list[dict], list[dict]]:
     """전체 성적과 누계 성적을 반환한다. 둘은 같은 응답에 함께 담겨 온다."""
     data = await query_raw(session, API_GRADES, stuno="")
     return (data.get(API_GRADES.dataset) or [], data.get("dsGradeAcmtlAll") or [])
+
+
+async def fetch_syllabus(
+    course_code: str,
+    year: str,
+    term: str,
+    section: str = "00",
+    grad_dept: str = GSCIT_GRAD_DEPT,
+) -> dict | None:
+    """강의계획서를 조회한다. 로그인이 필요 없다.
+
+    두 번 호출하는 이유가 있다. 평가항목과 주차별 계획은 기본정보와 다른
+    API에 있고, 그 API는 개설학과 코드(``estblDeprtCd``)가 정확해야 내용을
+    채워 준다. 틀리면 오류 대신 **빈 목록**이 와서 "미등록"으로 오인하기
+    쉽다. 학과 코드는 기본정보 응답에 들어 있으므로 받아서 그대로 쓴다.
+
+    과목이 개설되지 않았으면 ``None``, 개설됐지만 교수가 아직 계획서를
+    작성하지 않았으면 ``evaluation``/``weekly``가 빈 목록이 된다.
+    """
+    cond = {
+        "syy": year,
+        "smtDivcd": term,
+        "faclyGschDeptCd": grad_dept,
+        "estblDeprtCd": grad_dept,
+        "sbjtnb": course_code,
+        "dvcno": section,
+        "profEmpno": "",
+        "regIgnoreYn": "0",
+        "locale": "ko",
+        "sysUseUnitDivcd": "A0136",
+    }
+
+    info = await query_raw(None, API_SYLLABUS_INFO, **cond)
+    rows = info.get(API_SYLLABUS_INFO.dataset) or []
+    if not rows:
+        return None
+
+    base = rows[0]
+    cond["estblDeprtCd"] = base.get("estblDeprtCd") or grad_dept
+    plan = await query_raw(None, API_SYLLABUS_PLAN, **cond)
+
+    return {
+        "base": base,
+        "evaluation": sorted(
+            plan.get("dsSles364") or [], key=lambda r: r.get("seqno") or 0
+        ),
+        "weekly": sorted(
+            plan.get("dsSles366") or [], key=lambda r: r.get("lessnWkOdr") or 0
+        ),
+        "references": plan.get("dsSles373") or [],
+    }

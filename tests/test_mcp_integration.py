@@ -310,3 +310,115 @@ def test_kupid_get_all_grades_returns_mcp_serialized_output(monkeypatch):
     assert grade["grade_point"] == 4.5
     assert structured["summary"]["gpa"] == 4.2
     assert structured["summary"]["earned_credits"] == 18
+
+
+def _syllabus_payload(evaluation=None, weekly=None, references=None):
+    return {
+        "base": {
+            "sbjtnb": "BDC108",
+            "subjtNm": "통계적학습개론",
+            "dvcno": "00",
+            "cdt": 2,
+            "cmpsjNm": "전공선택 ",
+            "estblDeprtNm": "빅데이터융합학과",
+            "lctreTimePlaceLisup": "화(7-8) 정보통신관 604호",
+            "per001KorNm": "이창희",
+            "per001EmailAddr": "changheelee@korea.ac.kr",
+            "cnslgPosblTimeDesc": "화요일 20:00 ~ 20:30",
+            "gradeEvlMthdNm": "절대평가",
+            "atnlcRqistCtnt": "미적분학, 선형대수학 기초 지식이 필수적이다.",
+        },
+        "evaluation": evaluation or [],
+        "weekly": weekly or [],
+        "references": references or [],
+    }
+
+
+def test_kupid_syllabus_returns_evaluation_and_weekly(monkeypatch):
+    async def fake_fetch_syllabus(course_code, year, term, section="00", grad_dept=""):
+        assert (course_code, year, term) == ("BDC108", "2026", "2R")
+        return _syllabus_payload(
+            evaluation=[
+                {"evlItemCtnt": "수시과제", "evlSco": 30, "seqno": 1},
+                {"evlItemCtnt": "중간고사", "evlSco": 30, "seqno": 2},
+                {"evlItemCtnt": "기말고사", "evlSco": 30, "seqno": 3},
+                {"evlItemCtnt": "참여도", "evlSco": 10, "seqno": 4},
+            ],
+            weekly=[
+                {"lessnWkOdr": 8, "lctreCtnt": "중간고사", "mdtexOprtYn": "1"},
+                {"lessnWkOdr": 16, "lctreCtnt": "기말고사", "fnlexOprtYn": "1"},
+            ],
+            references=[
+                {"referBookNm": "ISLP", "pblcmNm": "Springer", "isbnVal": None}
+            ],
+        )
+
+    monkeypatch.setattr(server_module.ams, "fetch_syllabus", fake_fetch_syllabus)
+
+    structured = _assert_text_block_matches_structured_output(
+        _call_tool(
+            "kupid_syllabus", {"course_code": "bdc108", "year": "2026", "semester": "2"}
+        )
+    )
+
+    assert structured["success"] is True
+    assert structured["course_name"] == "통계적학습개론"
+    assert structured["category"] == "전공선택"
+    assert structured["evaluation_total"] == 100
+    assert structured["evaluation"][0] == {"item": "수시과제", "percent": 30}
+    assert structured["professor"]["office_hours"] == "화요일 20:00 ~ 20:30"
+    assert [w["week"] for w in structured["weekly"] if w["midterm"]] == [8]
+    assert [w["week"] for w in structured["weekly"] if w["final"]] == [16]
+    assert structured["references"][0]["title"] == "ISLP"
+    assert structured["note"] == ""
+
+
+def test_kupid_syllabus_notes_unwritten_evaluation(monkeypatch):
+    """계획서가 아직 비어 있어도 조회 자체는 성공해야 한다."""
+
+    async def fake_fetch_syllabus(course_code, year, term, section="00", grad_dept=""):
+        return _syllabus_payload()
+
+    monkeypatch.setattr(server_module.ams, "fetch_syllabus", fake_fetch_syllabus)
+
+    structured = _assert_text_block_matches_structured_output(
+        _call_tool("kupid_syllabus", {"course_code": "AAI104"})
+    )
+
+    assert structured["success"] is True
+    assert structured["evaluation"] == []
+    assert structured["evaluation_total"] == 0
+    assert "등록하지 않았" in structured["note"]
+
+
+def test_kupid_syllabus_reports_missing_course(monkeypatch):
+    async def fake_fetch_syllabus(course_code, year, term, section="00", grad_dept=""):
+        return None
+
+    monkeypatch.setattr(server_module.ams, "fetch_syllabus", fake_fetch_syllabus)
+
+    structured = _assert_text_block_matches_structured_output(
+        _call_tool("kupid_syllabus", {"course_code": "AAI999"})
+    )
+
+    assert structured["success"] is False
+    assert "찾을 수 없습니다" in structured["message"]
+
+
+def test_resolve_syllabus_term_maps_break_periods_to_regular_terms():
+    from datetime import date
+
+    resolve = server_module._resolve_syllabus_term
+
+    # 학기 중에는 그 학기를 그대로 본다.
+    assert resolve("2026", "1") == ("2026", "1R")
+    assert resolve("2026", "2") == ("2026", "2R")
+    # 이미 AMS 코드를 준 경우 손대지 않는다.
+    assert resolve("2026", "2R") == ("2026", "2R")
+
+    # 방학 중이면 다가오는 정규학기로 넘긴다.
+    assert resolve("", "", today=date(2026, 5, 1)) == ("2026", "1R")
+    assert resolve("", "", today=date(2026, 8, 12)) == ("2026", "2R")
+    assert resolve("", "", today=date(2026, 10, 1)) == ("2026", "2R")
+    # 1~2월은 직전 학년도 겨울학기 → 다가오는 학년도 1학기
+    assert resolve("", "", today=date(2027, 1, 15)) == ("2027", "1R")
