@@ -31,7 +31,7 @@
 > 업그레이드 방법은 [README의 "업데이트"](README.md#업데이트)를 참고하세요.
 > **uvx 사용자는 캐시 때문에 재시작만으로는 갱신되지 않습니다** (`uv cache clean ku-portal-mcp` 필요).
 
-## [Unreleased]
+## [0.20.0] - 2026-10-03
 
 ### 추가
 - **`kupid_lms_submit_assignment` — Canvas 파일 업로드형 과제 제출.**
