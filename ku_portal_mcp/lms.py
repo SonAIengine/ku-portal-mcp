@@ -17,9 +17,11 @@ import json
 import time
 import logging
 import base64
+import mimetypes
 import html as html_lib
 from urllib.parse import unquote
 from dataclasses import dataclass, asdict
+from datetime import datetime, timezone
 from pathlib import Path
 
 import httpx
@@ -641,6 +643,217 @@ async def download_lms_file(
         "filename": target.name,
         "size": total,
         "content_type": info.get("content-type") or info.get("content_type"),
+    }
+
+
+# ---- Assignment submission ------------------------------------------------
+# Canvas 3-step file upload for online_upload assignments:
+#   1. POST .../submissions/self/files  -> upload slot (upload_url + params)
+#   2. POST the file to upload_url      -> file id
+#   3. POST .../submissions             -> actually submits (irreversible-ish)
+# Only step 3 changes the grade-relevant state, so the server tool keeps a
+# dry-run default and requires an explicit confirm flag.
+
+# Used only when the assignment does not declare allowed_extensions.
+_DEFAULT_SUBMIT_EXTENSIONS = {
+    "pdf",
+    "doc",
+    "docx",
+    "hwp",
+    "hwpx",
+    "ppt",
+    "pptx",
+    "xls",
+    "xlsx",
+    "txt",
+    "zip",
+    "png",
+    "jpg",
+    "jpeg",
+    "py",
+    "ipynb",
+    "md",
+}
+
+
+def _csrf_headers(session: LMSSession) -> dict[str, str]:
+    """Canvas rejects cookie-authenticated writes without X-CSRF-Token."""
+    token = session.cookies.get("_csrf_token")
+    if not token:
+        raise RuntimeError("LMS 세션에 _csrf_token 쿠키가 없습니다. 다시 로그인하세요.")
+    return {"x-csrf-token": unquote(token)}
+
+
+async def fetch_lms_assignment(
+    session: LMSSession, course_id: int, assignment_id: int
+) -> dict:
+    """Fetch one assignment including the user's own submission."""
+    async with _api_client(session) as client:
+        resp = await client.get(
+            f"/api/v1/courses/{course_id}/assignments/{assignment_id}",
+            params=[("include[]", "submission")],
+        )
+        resp.raise_for_status()
+        return resp.json()
+
+
+def _parse_canvas_time(value: str | None) -> datetime | None:
+    if not value:
+        return None
+    return datetime.fromisoformat(value.replace("Z", "+00:00"))
+
+
+def check_submission_plan(
+    assignment: dict,
+    file_path: Path,
+    now: datetime | None = None,
+) -> dict:
+    """Decide whether file_path may be submitted to assignment (no network).
+
+    Returns {"ok": bool, "problems": [...], "warnings": [...]}. Problems block
+    the submission; warnings (e.g. past due) are shown but do not.
+    """
+    now = now or datetime.now(timezone.utc)
+    problems: list[str] = []
+    warnings: list[str] = []
+
+    types = assignment.get("submission_types") or []
+    if "online_upload" not in types:
+        problems.append(
+            f"파일 업로드 제출이 불가능한 과제입니다 (submission_types={types})"
+        )
+
+    unlock_at = _parse_canvas_time(assignment.get("unlock_at"))
+    lock_at = _parse_canvas_time(assignment.get("lock_at"))
+    due_at = _parse_canvas_time(assignment.get("due_at"))
+    if unlock_at and now < unlock_at:
+        problems.append(
+            f"아직 열리지 않은 과제입니다 (unlock_at={assignment.get('unlock_at')})"
+        )
+    if lock_at and now > lock_at:
+        problems.append(f"제출이 잠긴 과제입니다 (lock_at={assignment.get('lock_at')})")
+    if assignment.get("locked_for_user") and not problems:
+        problems.append(
+            f"제출이 잠긴 과제입니다 ({assignment.get('lock_explanation') or 'locked_for_user'})"
+        )
+    if due_at and now > due_at and not problems:
+        warnings.append(
+            f"마감({assignment.get('due_at')})이 지나 늦은 제출로 처리될 수 있습니다"
+        )
+
+    ext = file_path.suffix.lstrip(".").lower()
+    allowed = [
+        e.lstrip(".").lower() for e in (assignment.get("allowed_extensions") or [])
+    ]
+    if allowed:
+        if ext not in allowed:
+            problems.append(
+                f"허용되지 않는 확장자입니다: .{ext} (허용: {', '.join(allowed)})"
+            )
+    elif ext not in _DEFAULT_SUBMIT_EXTENSIONS:
+        problems.append(f"제출 가능한 문서 확장자가 아닙니다: .{ext}")
+
+    attempts = assignment.get("allowed_attempts")
+    sub = assignment.get("submission") or {}
+    if (
+        isinstance(attempts, int)
+        and attempts > 0
+        and (sub.get("attempt") or 0) >= attempts
+    ):
+        problems.append(f"제출 가능 횟수({attempts}회)를 모두 사용했습니다")
+    if sub.get("workflow_state") in ("submitted", "graded", "pending_review"):
+        warnings.append(
+            "이미 제출된 과제입니다. 새로 제출하면 재제출(새 attempt)이 됩니다"
+        )
+
+    return {"ok": not problems, "problems": problems, "warnings": warnings}
+
+
+async def submit_lms_assignment(
+    session: LMSSession,
+    course_id: int,
+    assignment_id: int,
+    file_path: Path,
+) -> dict:
+    """Upload file_path and submit it to the assignment (online_upload).
+
+    This really submits. Callers must have checked check_submission_plan and
+    obtained user confirmation first.
+    """
+    name = _sanitize_filename(file_path.name)
+    size = file_path.stat().st_size
+    content_type = mimetypes.guess_type(name)[0] or "application/octet-stream"
+    csrf = _csrf_headers(session)
+    base = f"/api/v1/courses/{course_id}/assignments/{assignment_id}/submissions"
+
+    async with _api_client(session) as client:
+        # 1. upload slot
+        resp = await client.post(
+            f"{base}/self/files",
+            data={"name": name, "size": str(size), "content_type": content_type},
+            headers=csrf,
+        )
+        resp.raise_for_status()
+        slot = resp.json()
+        upload_url = slot.get("upload_url")
+        if not upload_url:
+            raise RuntimeError(f"업로드 URL을 받지 못했습니다: {slot}")
+
+        # 2. send the bytes. The upload host can be a third party (S3/InstFS),
+        # so use a client WITHOUT the Canvas session cookie.
+        async with httpx.AsyncClient(
+            timeout=300.0, headers={"user-agent": _UA}, follow_redirects=False
+        ) as up:
+            with file_path.open("rb") as fh:
+                up_resp = await up.post(
+                    upload_url,
+                    data=slot.get("upload_params") or {},
+                    files={"file": (name, fh, content_type)},
+                )
+        if up_resp.status_code in (301, 302, 303):
+            # Canvas-hosted flow: the Location is the confirmation endpoint and
+            # needs the session.
+            location = up_resp.headers.get("location")
+            if not location:
+                raise RuntimeError("업로드 확인 URL(Location)이 없습니다.")
+            conf = await client.get(location)
+            conf.raise_for_status()
+            uploaded = conf.json()
+        else:
+            up_resp.raise_for_status()
+            uploaded = up_resp.json()
+        file_id = uploaded.get("id")
+        if not file_id:
+            raise RuntimeError(f"업로드된 파일 ID를 확인하지 못했습니다: {uploaded}")
+
+        # 3. submit
+        resp = await client.post(
+            base,
+            data={
+                "submission[submission_type]": "online_upload",
+                "submission[file_ids][]": [str(file_id)],
+            },
+            headers=csrf,
+        )
+        resp.raise_for_status()
+        result = resp.json()
+
+    return {
+        "file_id": file_id,
+        "filename": name,
+        "size": size,
+        "workflow_state": result.get("workflow_state"),
+        "submitted_at": result.get("submitted_at"),
+        "attempt": result.get("attempt"),
+        "late": result.get("late"),
+        "attachments": [
+            {
+                "id": a.get("id"),
+                "filename": a.get("display_name") or a.get("filename"),
+                "size": a.get("size"),
+            }
+            for a in (result.get("attachments") or [])
+        ],
     }
 
 

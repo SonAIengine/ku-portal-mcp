@@ -255,6 +255,7 @@ KUPID 포털 게시판과 교무처 학사일정을 **로그인 없이** 조회�
 | 30 | `kupid_dept_notices` | 학과/대학원 홈페이지 공지 목록 | **불필요** |
 | 31 | `kupid_dept_notice_detail` | 학과/대학원 공지 상세 | **불필요** |
 | 32 | `kupid_syllabus` | 강의계획서 — **평가 비중·주차별 계획**·교재·교수 연락처 | **불필요** |
+| 33 | `kupid_lms_submit_assignment` | LMS 파일 업로드형 과제 **제출** (기본 미리보기, `confirm=True`일 때만 실제 제출) | SSO |
 
 > **인증 안내**: SSO = 고려대 통합 로그인(`sso.korea.ac.kr`). 포털과 LMS 모두 같은 ID/PW를 사용하며, 환경변수만 설정하면 자동으로 로그인됩니다.
 >

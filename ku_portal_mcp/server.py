@@ -67,6 +67,9 @@ from .lms import (
     fetch_lms_quizzes,
     fetch_lms_syllabus,
     download_lms_file,
+    fetch_lms_assignment,
+    check_submission_plan,
+    submit_lms_assignment,
     fetch_lms_boards,
     fetch_lms_board_posts,
     fetch_lms_board_post,
@@ -1665,6 +1668,106 @@ async def kupid_lms_syllabus(
     except Exception as e:
         logger.error(f"Failed to fetch LMS syllabus: {e}")
         return {"success": False, "message": f"LMS 수업 계획서 조회 실패: {e}"}
+
+
+@server.tool()
+async def kupid_lms_submit_assignment(
+    course_id: int,
+    assignment_id: int,
+    file_path: str,
+    confirm: bool = False,
+) -> dict[str, Any]:
+    """Canvas LMS 과제(파일 업로드형)에 파일을 제출합니다.
+
+    기본값은 미리보기(dry-run)입니다. confirm=False이면 아무것도 제출하지 않고
+    과제 정보, 마감, 제출 상태, 올릴 파일, 막는 문제(problems)와 주의사항
+    (warnings)만 반환합니다. 사용자가 그 내용을 확인하고 제출을 승인한 뒤에만
+    confirm=True로 다시 호출하세요. 제출은 성적에 반영되며 되돌리기 어렵습니다.
+
+    course_id/assignment_id는 kupid_lms_courses, kupid_lms_assignments로 확인합니다.
+
+    Args:
+        course_id: 과목 ID
+        assignment_id: 과제 ID (kupid_lms_assignments의 id 필드)
+        file_path: 제출할 파일의 절대경로 (숨김 폴더 하위 불가)
+        confirm: True일 때만 실제로 제출 (기본값: False)
+    """
+    try:
+        raw = file_path.strip()
+        if not raw:
+            return {"success": False, "message": "file_path가 비어 있습니다."}
+        path = Path(raw).expanduser()
+        if not path.is_absolute():
+            return {
+                "success": False,
+                "message": f"file_path는 절대경로여야 합니다: {file_path}",
+            }
+        if ".." in path.parts:
+            return {
+                "success": False,
+                "message": "file_path에 '..'를 포함할 수 없습니다.",
+            }
+        # Keep credentials/config out of reach: never upload from hidden dirs.
+        if any(part.startswith(".") for part in path.parts[1:]):
+            return {"success": False, "message": "숨김 폴더/파일은 제출할 수 없습니다."}
+        if not path.is_file():
+            return {"success": False, "message": f"파일을 찾을 수 없습니다: {path}"}
+        size = path.stat().st_size
+        if size == 0:
+            return {"success": False, "message": "빈 파일은 제출할 수 없습니다."}
+
+        async def _fetch(session, cid=course_id, aid=assignment_id):
+            return await fetch_lms_assignment(session, cid, aid)
+
+        assignment = await _lms_with_retry(_fetch)
+        plan = check_submission_plan(assignment, path)
+        sub = assignment.get("submission") or {}
+        info = {
+            "assignment": {
+                "id": assignment.get("id"),
+                "name": assignment.get("name"),
+                "due_at": assignment.get("due_at"),
+                "lock_at": assignment.get("lock_at"),
+                "points_possible": assignment.get("points_possible"),
+                "html_url": assignment.get("html_url"),
+            },
+            "current_submission": {
+                "workflow_state": sub.get("workflow_state"),
+                "submitted_at": sub.get("submitted_at"),
+                "attempt": sub.get("attempt"),
+            },
+            "file": {"path": str(path), "size": size},
+            "problems": plan["problems"],
+            "warnings": plan["warnings"],
+        }
+        if not plan["ok"]:
+            return {
+                "success": False,
+                "submitted": False,
+                **info,
+                "message": "제출할 수 없는 상태입니다. problems를 확인하세요.",
+            }
+        if not confirm:
+            return {
+                "success": True,
+                "submitted": False,
+                "dry_run": True,
+                **info,
+                "message": "미리보기입니다. 제출하려면 사용자 승인 후 confirm=True로 다시 호출하세요.",
+            }
+
+        async def _submit(session, cid=course_id, aid=assignment_id, fp=path):
+            return await submit_lms_assignment(session, cid, aid, fp)
+
+        result = await _lms_with_retry(_submit)
+        return {"success": True, "submitted": True, **info, "result": result}
+    except Exception as e:
+        logger.error(f"Failed to submit LMS assignment: {e}")
+        return {
+            "success": False,
+            "submitted": False,
+            "message": f"LMS 과제 제출 실패: {e}",
+        }
 
 
 @server.tool()

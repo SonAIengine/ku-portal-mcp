@@ -15,7 +15,7 @@
 - 린트: `ruff check . --fix && ruff format .`
 
 ## 프로젝트 구조
-- `ku_portal_mcp/` — MCP 서버 코드 (tools 32개)
+- `ku_portal_mcp/` — MCP 서버 코드 (tools 33개)
 - `run.py` — 로컬 실행 진입점
 - `pyproject.toml` — 패키지 메타데이터 (현재 v0.19.0)
 
